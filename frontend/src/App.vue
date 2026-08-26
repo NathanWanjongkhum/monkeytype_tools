@@ -60,9 +60,11 @@ function correlationReading(r: number): string {
         <h3>WPM over time</h3>
         <p class="caption">
           One dot per attempt - color is mode, a gold ring marks a PB - instead of a single connective line, so
-          outcome (any one test's wpm) doesn't stand in for trend. Toggle All-time best / Avg of 10 / Avg of 100
-          to read direction instead of noise, and filter by mode, dictionary, punctuation/numbers, or a rolling
-          lookback window to isolate a slice.
+          outcome (any one test's wpm) doesn't stand in for trend. The x-axis is cumulative hours of typing
+          practice, not calendar time, so idle days between sessions don't stretch the chart and back-to-back
+          tests don't collapse into an unreadable smear; dashed dividers mark where a new calendar day of practice
+          began. Toggle All-time best / Avg of 10 / Avg of 100 to read direction instead of noise, and filter by
+          mode, dictionary, punctuation/numbers, or a rolling lookback window to isolate a slice.
         </p>
         <WpmMasterChart :series="data.series" :wpm-per-hour-typing="data.insights.wpm_per_hour_typing" />
       </section>

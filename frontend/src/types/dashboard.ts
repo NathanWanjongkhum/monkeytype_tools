@@ -108,6 +108,7 @@ export interface SeriesPoint {
   punctuation: boolean
   numbers: boolean
   raw_wpm: number
+  test_duration: number
 }
 
 export interface DashboardPayload {

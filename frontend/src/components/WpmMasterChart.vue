@@ -74,13 +74,26 @@ const showAvg100 = ref(false)
 // scales
 // ---------------------------------------------------------------------------
 
-const timestamps = computed(() => filtered.value.map((s) => new Date(s.timestamp).getTime()))
-const tMin = computed(() => (timestamps.value.length ? Math.min(...timestamps.value) : 0))
-const tMax = computed(() => (timestamps.value.length ? Math.max(...timestamps.value) : 1))
-const tSpan = computed(() => Math.max(tMax.value - tMin.value, 1))
+// X is cumulative hours of typing practice, not wall-clock time - matches
+// backend/dashboard_data.py's compute_insights, which regresses wpm against
+// this exact same cumulative-hours basis for "speed change per hour spent
+// typing" above. Idle days between sessions cost zero x-width this way,
+// instead of a linear-time axis crushing every burst of back-to-back tests
+// into a near-vertical smear and wasting most of the plot on empty gaps.
+const cumHours = computed(() => {
+  let sum = 0
+  return filtered.value.map((s) => {
+    sum += (s.test_duration ?? 0) / 3600
+    return sum
+  })
+})
+const hoursSpan = computed(() => {
+  const arr = cumHours.value
+  return Math.max(arr.length ? arr[arr.length - 1] : 0, 1e-6)
+})
 
-function xOf(ts: number) {
-  return padL + ((ts - tMin.value) / tSpan.value) * plotW
+function xOf(hours: number) {
+  return padL + (hours / hoursSpan.value) * plotW
 }
 
 const wpmValues = computed(() => filtered.value.map((s) => s.wpm))
@@ -99,17 +112,44 @@ function yOf(v: number) {
 
 const gridLines = computed(() => yTicks.value.map((t) => ({ t, y: yOf(t) })))
 
-const xTickLabels = computed(() => {
-  if (!filtered.value.length) return []
-  return [0, 0.25, 0.5, 0.75, 1].map((frac) => {
-    const ts = tMin.value + frac * (tMax.value - tMin.value)
-    return { x: padL + frac * plotW, label: fmtTickDate(ts) }
+// One marker per real calendar-day boundary, instead of 5 fixed fractions of
+// plot width: since x no longer tracks elapsed time, this is both the axis's
+// date labels and the "a break happened here" cue, at zero extra x-cost.
+const dayBoundaries = computed(() => {
+  const out: { x: number; label: string }[] = []
+  let prevDate: string | null = null
+  filtered.value.forEach((s, i) => {
+    const d = new Date(s.timestamp).toDateString()
+    if (d !== prevDate) {
+      out.push({ x: xOf(cumHours.value[i]), label: fmtTickDate(s.timestamp) })
+      prevDate = d
+    }
   })
+  return out
 })
 
-function fmtTickDate(ms: number) {
-  return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+function fmtTickDate(ts: string) {
+  return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
+
+// Every real day boundary gets a divider line (dayBoundaries above), but two
+// boundaries can land only a few pixels apart when little practice time
+// separated them (e.g. one test late one night, one early two days later,
+// with an idle day of zero width in between) - labeling both garbles into
+// overlapping text. Greedily drop a label if it's too close to the last one
+// actually kept; the divider line itself is still drawn for every boundary.
+const MIN_LABEL_SPACING = 36
+const dayLabels = computed(() => {
+  const out: { x: number; label: string }[] = []
+  let lastX = -Infinity
+  for (const b of dayBoundaries.value) {
+    if (b.x - lastX >= MIN_LABEL_SPACING) {
+      out.push(b)
+      lastX = b.x
+    }
+  }
+  return out
+})
 
 // ---------------------------------------------------------------------------
 // per-mode color, dots, PB rings
@@ -130,8 +170,8 @@ interface Point extends HoverPoint<SeriesPoint> {
 }
 
 const points = computed<Point[]>(() =>
-  filtered.value.map((s) => ({
-    x: xOf(new Date(s.timestamp).getTime()),
+  filtered.value.map((s, i) => ({
+    x: xOf(cumHours.value[i]),
     y: yOf(s.wpm),
     data: s,
     color: modeColor.value[s.mode] ?? 'var(--text-muted)',
@@ -324,14 +364,23 @@ const speedGood = computed(() => props.wpmPerHourTyping > 0)
           text-anchor="end"
           dominant-baseline="middle"
         >{{ Math.round(g.t) }}</text>
+        <line
+          v-for="b in dayBoundaries"
+          :key="'div' + b.x"
+          :x1="b.x"
+          :y1="padT"
+          :x2="b.x"
+          :y2="padT + plotH"
+          class="day-divider"
+        />
         <text
-          v-for="t in xTickLabels"
-          :key="t.label + t.x"
-          :x="t.x"
+          v-for="b in dayLabels"
+          :key="'lbl' + b.x"
+          :x="b.x"
           :y="padT + plotH + 20"
           class="tick-label"
           text-anchor="middle"
-        >{{ t.label }}</text>
+        >{{ b.label }}</text>
         <line :x1="padL" :y1="padT + plotH" :x2="width - padR" :y2="padT + plotH" class="axis-line" />
 
         <path v-if="showBest" :d="bestPath" class="trend-line-best" />
