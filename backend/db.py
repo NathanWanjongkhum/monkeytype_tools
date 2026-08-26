@@ -30,6 +30,8 @@ CREATE TABLE results (
     quote_length            BIGINT,
     restart_count           BIGINT,
     is_pb                   BOOLEAN,
+    punctuation             BOOLEAN,
+    numbers                 BOOLEAN,
     incomplete_test_seconds DOUBLE,
     test_duration           DOUBLE,
     afk_duration            DOUBLE,

@@ -8,10 +8,10 @@ import ErgonomicsDetailTable from './components/ErgonomicsDetailTable.vue'
 import ErgonomicsSummaryTable from './components/ErgonomicsSummaryTable.vue'
 import KeyboardHeatmap from './components/KeyboardHeatmap.vue'
 import KpiRow from './components/KpiRow.vue'
-import LineChart from './components/LineChart.vue'
 import OpenQuestions from './components/OpenQuestions.vue'
 import PopularTestsTable from './components/PopularTestsTable.vue'
 import ScatterChart from './components/ScatterChart.vue'
+import WpmMasterChart from './components/WpmMasterChart.vue'
 import { useDashboardData } from './composables/useDashboardData'
 import { BLUE_RAMP, ORANGE_RAMP, fmtCount } from './lib/chartMath'
 import { MIN_SAMPLES } from './lib/constants'
@@ -44,10 +44,12 @@ const bigramCount = computed(() => data.value?.bigram_rows.length ?? 0)
 
         <h3>WPM over time</h3>
         <p class="caption">
-          Test types are mixed (15s/30s/60s/word-count/quote), so this trend is noisier than a single-mode series
-          would be. Read the direction, not the exact slope. See Popular tests below for a same-mode breakdown.
+          One dot per attempt - color is mode, a gold ring marks a PB - instead of a single connective line, so
+          outcome (any one test's wpm) doesn't stand in for trend. Toggle All-time best / Avg of 10 / Avg of 100
+          to read direction instead of noise, and filter by mode, dictionary, punctuation/numbers, or a rolling
+          lookback window to isolate a slice.
         </p>
-        <LineChart :series="data.series" />
+        <WpmMasterChart :series="data.series" :wpm-per-hour-typing="data.insights.wpm_per_hour_typing" />
 
         <h3>Accuracy vs. WPM</h3>
         <p class="caption">

@@ -129,7 +129,8 @@ def load_results_db(con):
     df = con.execute(
         "SELECT ts AS timestamp, wpm, acc, consistency, mode, mode2, "
         "test_duration AS testDuration, raw_wpm, restart_count, "
-        "chars_incorrect + chars_extra + chars_missed AS error_count, tags "
+        "chars_incorrect + chars_extra + chars_missed AS error_count, tags, "
+        "is_pb, language, punctuation, numbers "
         "FROM results WHERE ts IS NOT NULL ORDER BY ts"
     ).fetchdf()
     return df.reset_index(drop=True)
@@ -284,6 +285,14 @@ def compute_insights(df, bigram_rows):
 
     acc_wpm_r = float(np.corrcoef(df["acc"], df["wpm"])[0, 1]) if len(df) >= 2 else 0.0
 
+    # Speed change per hour of practice: regress wpm against cumulative
+    # practice time (test_duration summed up to and including each test,
+    # in hours) rather than test index, so the slope reads as "wpm gained
+    # per hour actually spent typing" instead of "wpm gained per test" -
+    # a fairer trend given tests vary a lot in length (15s vs 120s vs quote).
+    cumulative_hours = df["testDuration"].fillna(0).cumsum() / 3600
+    wpm_per_hour_slope, _, _ = linreg(cumulative_hours, df["wpm"])
+
     return {
         "wpm_slope_per_test": wpm_slope,
         "wpm_trend_r": wpm_r,
@@ -291,6 +300,7 @@ def compute_insights(df, bigram_rows):
         "acc_std_first_half": acc_std_first,
         "acc_std_second_half": acc_std_second,
         "acc_wpm_correlation": acc_wpm_r,
+        "wpm_per_hour_typing": wpm_per_hour_slope,
         "has_tags": False,  # set by caller once tag data is checked
         "bigram_rows": bigram_rows,
     }

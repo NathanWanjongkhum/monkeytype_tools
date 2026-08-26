@@ -30,6 +30,7 @@ export interface Insights {
   acc_std_first_half: number | null
   acc_std_second_half: number | null
   acc_wpm_correlation: number
+  wpm_per_hour_typing: number
 }
 
 export type ActionStatus = 'good' | 'warning' | 'serious'
@@ -100,6 +101,11 @@ export interface SeriesPoint {
   acc: number
   mode: string
   mode2: string | null
+  is_pb: boolean
+  language: string | null
+  punctuation: boolean
+  numbers: boolean
+  raw_wpm: number
 }
 
 export interface DashboardPayload {

@@ -78,6 +78,8 @@ def load_results(con: duckdb.DuckDBPyConnection) -> None:
             "quote_length": r.get("quoteLength"),
             "restart_count": r.get("restartCount"),
             "is_pb": is_pb,
+            "punctuation": bool(r.get("punctuation")),
+            "numbers": bool(r.get("numbers")),
             "incomplete_test_seconds": r.get("incompleteTestSeconds"),
             "test_duration": test_duration,
             "afk_duration": afk_duration,

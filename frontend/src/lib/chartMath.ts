@@ -18,6 +18,33 @@ export function niceTicks(vmin: number, vmax: number, count = 5): number[] {
   return ticks
 }
 
+/** Rolling mean with a fixed lookback `window`. Uses an expanding window
+ * for the first `window - 1` points (mean of however many samples exist so
+ * far) rather than padding with NaN, so a trend line is present from the
+ * very first point instead of appearing partway through the series. */
+export function rollingMean(values: number[], window: number): number[] {
+  const out: number[] = []
+  const buf: number[] = []
+  let sum = 0
+  for (const v of values) {
+    buf.push(v)
+    sum += v
+    if (buf.length > window) sum -= buf.shift()!
+    out.push(sum / buf.length)
+  }
+  return out
+}
+
+/** Running maximum: out[i] = max(values[0..i]). The "all-time best" trend
+ * envelope - a step function that only ever rises. */
+export function runningMax(values: number[]): number[] {
+  let best = -Infinity
+  return values.map((v) => {
+    best = Math.max(best, v)
+    return best
+  })
+}
+
 function hexToRgb01(hex: string): [number, number, number] {
   const h = hex.replace('#', '')
   return [

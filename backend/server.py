@@ -88,7 +88,9 @@ def _build_payload() -> dict:
     drill_text = generate_drill_list.generate(bigram_rows)
     category_drills = generate_drill_list.generate_category_drills(bigram_rows)
 
-    series = df[["timestamp", "wpm", "acc", "mode", "mode2"]].to_dict("records")
+    series = df[
+        ["timestamp", "wpm", "acc", "mode", "mode2", "is_pb", "language", "punctuation", "numbers", "raw_wpm"]
+    ].to_dict("records")
 
     drills = {
         "overall": {"text": drill_text, "path": "drill_practice.txt" if drill_text else None},
