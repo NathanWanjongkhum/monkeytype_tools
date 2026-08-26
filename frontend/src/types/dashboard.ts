@@ -1,11 +1,22 @@
 export interface Kpis {
   n_tests: number
+  est_words_typed: number
+  tests_started: number
+  completion_rate_pct: number
+  restarts_per_test: number
   best_wpm: number
+  avg_wpm_all: number
   avg_wpm_recent: number
   avg_wpm_first: number
+  best_raw_wpm: number
+  avg_raw_wpm_all: number
+  avg_raw_wpm_recent: number
+  best_acc: number
   avg_acc_recent: number
   avg_acc_all: number
+  best_consistency: number
   avg_consistency_recent: number
+  avg_consistency_all: number
   avg_errors_recent: number
   avg_errors_first: number
   total_minutes_typing: number

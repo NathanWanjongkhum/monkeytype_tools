@@ -128,7 +128,7 @@ POPULAR_TESTS = [
 def load_results_db(con):
     df = con.execute(
         "SELECT ts AS timestamp, wpm, acc, consistency, mode, mode2, "
-        "test_duration AS testDuration, "
+        "test_duration AS testDuration, raw_wpm, restart_count, "
         "chars_incorrect + chars_extra + chars_missed AS error_count, tags "
         "FROM results WHERE ts IS NOT NULL ORDER BY ts"
     ).fetchdf()
@@ -234,14 +234,35 @@ def compute_kpis(df):
     recent = df.tail(RECENT_N)
     first = df.head(RECENT_N)
     total_seconds = float(df["testDuration"].sum())
+
+    # Monkeytype's API only includes restartCount on a result when it's
+    # nonzero (confirmed against the DB: every non-null value is >= 1), so a
+    # null here means "no restarts before this completed test", i.e. 0.
+    restart_count = df["restart_count"].fillna(0)
+    total_restarts = float(restart_count.sum())
+    tests_started = n + total_restarts
+
+    est_words_typed = float((df["wpm"] * (df["testDuration"] / 60)).sum())
+
     return {
         "n_tests": n,
+        "est_words_typed": est_words_typed,
+        "tests_started": tests_started,
+        "completion_rate_pct": (n / tests_started * 100) if tests_started else 0.0,
+        "restarts_per_test": float(restart_count.mean()) if n else 0.0,
         "best_wpm": float(df["wpm"].max()),
+        "avg_wpm_all": float(df["wpm"].mean()),
         "avg_wpm_recent": float(recent["wpm"].mean()),
         "avg_wpm_first": float(first["wpm"].mean()),
+        "best_raw_wpm": float(df["raw_wpm"].max()),
+        "avg_raw_wpm_all": float(df["raw_wpm"].mean()),
+        "avg_raw_wpm_recent": float(recent["raw_wpm"].mean()),
+        "best_acc": float(df["acc"].max()),
         "avg_acc_recent": float(recent["acc"].mean()),
         "avg_acc_all": float(df["acc"].mean()),
+        "best_consistency": float(df["consistency"].max()),
         "avg_consistency_recent": float(recent["consistency"].mean()),
+        "avg_consistency_all": float(df["consistency"].mean()),
         "avg_errors_recent": float(recent["error_count"].mean()),
         "avg_errors_first": float(first["error_count"].mean()),
         "total_minutes_typing": total_seconds / 60,
