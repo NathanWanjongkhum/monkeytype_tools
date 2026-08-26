@@ -62,21 +62,9 @@ h3 { font-size: 13px; font-weight: 600; margin: 28px 0 10px; color: var(--text-s
 .caption.footnote { font-style: italic; font-size: 11px; }
 section { margin-bottom: 36px; }
 
-.kpi-groups { display: flex; flex-direction: column; gap: 18px; }
-.kpi-group-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em;
-  color: var(--text-muted); margin: 0 0 8px; }
-.kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
-.stat-tile {
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 14px 16px;
-}
-.stat-label { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
-.stat-value { font-size: 26px; font-weight: 600; font-variant-numeric: proportional-nums; }
-.stat-delta { font-size: 12px; margin-top: 4px; display: flex; align-items: center; gap: 4px; }
-.stat-delta.good { color: var(--good); }
-.stat-delta.critical { color: var(--critical); }
+.kpi-table td.kpi-group-cell { font-weight: 600; color: var(--text-secondary); vertical-align: top;
+  border-right: 1px solid var(--gridline); }
+.kpi-table td.delta-badge { font-size: 12px; font-weight: 500; white-space: nowrap; }
 .delta-badge { font-weight: 600; }
 .delta-badge.good { color: var(--good); }
 .delta-badge.critical { color: var(--critical); }
