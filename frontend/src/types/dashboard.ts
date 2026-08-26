@@ -62,10 +62,24 @@ export interface ErgoCategoryRow {
   n: number
   avg: number | null
   delta_pct: number | null
+  /** Occurrence-weighted median latency for this category - the
+   * "representative" baseline, less skewed by outliers than avg. */
+  median: number | null
+  /** The bigram in this category whose own median sits closest to `median`
+   * above - a concrete, named example of "typical" for this category. */
+  representative_bigram: string | null
+  representative_median: number | null
 }
 
 export interface ErgoDetailRow extends BigramRow {
   category: string
+}
+
+/** A concrete named bigram used as a representative/baseline reference
+ * point, paired with its own median latency. */
+export interface ErgoRepresentative {
+  bigram: string
+  median: number
 }
 
 export interface DrillInfo {
@@ -96,6 +110,9 @@ export interface DashboardPayload {
   bigram_rows: BigramRow[]
   popular_tests: PopularTestRow[]
   ergonomics: {
+    overall_avg: number | null
+    overall_median: number | null
+    overall_representative: ErgoRepresentative | null
     category_rows: ErgoCategoryRow[]
     detail_rows: ErgoDetailRow[]
   }

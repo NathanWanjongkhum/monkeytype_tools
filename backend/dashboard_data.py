@@ -373,18 +373,49 @@ def classify_bigram(bigram):
     return tags
 
 
+def _weighted_median_and_representative(rows):
+    """Approximates an occurrence-weighted median from per-bigram summary
+    stats. bigram_rows only carries each bigram's own n/median/mean, not raw
+    per-keystroke gaps, so the weighted median is approximated the same way
+    overall_avg/category avg are weighted: expand each bigram's median by its
+    occurrence count n (np.repeat) and take the median of that expanded
+    population.
+
+    Also returns the single bigram from `rows` whose own median sits closest
+    to that weighted-median value - a concrete, named "representative"
+    example (e.g. "bigram 'th' types at ~180ms") to serve as the baseline
+    TODO.md asks tail/outlier sections to be measured against, rather than
+    just an abstract number nothing in the data corresponds to."""
+    if not rows:
+        return None, None
+    medians = [r["median"] for r in rows]
+    weights = [r["n"] for r in rows]
+    weighted_median = float(np.median(np.repeat(medians, weights)))
+    representative = min(rows, key=lambda r: abs(r["median"] - weighted_median))
+    return weighted_median, {
+        "bigram": representative["bigram"],
+        "median": representative["median"],
+    }
+
+
 def compute_bigram_ergonomics(bigram_rows):
     """Aggregate the same trustworthy bigrams (bigram_rows, already past
     MIN_SAMPLES) by finger-mechanics category. Each category's "avg" is an
     occurrence-weighted mean gap (sum(mean*n)/sum(n)) rather than a mean of
     medians, so it's a true average across every logged occurrence in that
-    category and comparable to overall_avg, which is weighted the same way."""
+    category and comparable to overall_avg, which is weighted the same way.
+
+    "median"/"representative_bigram"/"representative_median" (and their
+    overall_* counterparts) are the "representative" baseline: a
+    less-outlier-skewed benchmark than the mean, paired with a concrete named
+    bigram close to it, for the tail/outlier sections to compare against."""
     tags_by_bigram = {r["bigram"]: classify_bigram(r["bigram"]) for r in bigram_rows}
 
     total_n = sum(r["n"] for r in bigram_rows)
     overall_avg = (
         (sum(r["mean"] * r["n"] for r in bigram_rows) / total_n) if total_n else None
     )
+    overall_median, overall_representative = _weighted_median_and_representative(bigram_rows)
 
     category_rows = []
     detail_rows = []
@@ -395,6 +426,7 @@ def compute_bigram_ergonomics(bigram_rows):
         delta_pct = (
             ((avg / overall_avg) - 1) * 100 if avg is not None and overall_avg else None
         )
+        median, representative = _weighted_median_and_representative(matches)
         category_rows.append(
             {
                 "key": key,
@@ -404,12 +436,15 @@ def compute_bigram_ergonomics(bigram_rows):
                 "n": n,
                 "avg": avg,
                 "delta_pct": delta_pct,
+                "median": median,
+                "representative_bigram": representative["bigram"] if representative else None,
+                "representative_median": representative["median"] if representative else None,
             }
         )
         for r in sorted(matches, key=lambda r: -r["median"])[:5]:
             detail_rows.append({"category": label, **r})
 
-    return overall_avg, category_rows, detail_rows
+    return overall_avg, overall_median, overall_representative, category_rows, detail_rows
 
 
 def compute_action_plan(kpis, insights, has_tags):

@@ -77,9 +77,13 @@ def _build_payload() -> dict:
     insights = dd.compute_insights(df, bigram_rows)
     actions = dd.compute_action_plan(kpis, insights, has_tags)
     popular_tests_rows = dd.compute_popular_tests(df)
-    _overall_avg, ergo_category_rows, ergo_detail_rows = dd.compute_bigram_ergonomics(
-        bigram_rows
-    )
+    (
+        ergo_overall_avg,
+        ergo_overall_median,
+        ergo_overall_representative,
+        ergo_category_rows,
+        ergo_detail_rows,
+    ) = dd.compute_bigram_ergonomics(bigram_rows)
 
     drill_text = generate_drill_list.generate(bigram_rows)
     category_drills = generate_drill_list.generate_category_drills(bigram_rows)
@@ -109,6 +113,9 @@ def _build_payload() -> dict:
         "bigram_rows": bigram_rows,
         "popular_tests": popular_tests_rows,
         "ergonomics": {
+            "overall_avg": ergo_overall_avg,
+            "overall_median": ergo_overall_median,
+            "overall_representative": ergo_overall_representative,
             "category_rows": ergo_category_rows,
             "detail_rows": ergo_detail_rows,
         },

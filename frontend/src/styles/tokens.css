@@ -172,6 +172,14 @@ section { margin-bottom: 36px; }
 
 .empty-state { color: var(--text-muted); font-size: 13px; font-style: italic; }
 .empty-cell { color: var(--text-muted); }
+
+/* Representative/baseline reference row: a "typical" example row planted
+   among outlier rows (slowest bigrams, worst offenders by category), styled
+   to read as reference rather than another data point. */
+.rep-row { background: var(--series-1-wash); }
+.rep-row td { border-top: 1px dashed var(--axis-line); border-bottom: 1px dashed var(--axis-line); }
+.rep-tag { font-weight: 600; font-size: 11px; color: var(--text-muted); margin-left: 2px; }
+.bar-fill.rep-fill { background: var(--text-muted); }
 footer { color: var(--text-muted); font-size: 11px; margin-top: 40px; }
 
 .heat-svg { width: 100%; height: auto; display: block; overflow: visible; }

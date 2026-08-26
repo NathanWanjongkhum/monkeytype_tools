@@ -62,7 +62,9 @@ const bigramCount = computed(() => data.value?.bigram_rows.length ?? 0)
         <p class="caption">
           Median inter-key latency for every bigram with at least {{ MIN_SAMPLES }} logged samples, slowest first.
           Each row's glyph plots that bigram's actual two keys - critical red when both land on the same finger,
-          the one mechanic the Finger mechanics section below finds reliably slower.
+          the one mechanic the Finger mechanics section below finds reliably slower. The dashed row is the
+          representative baseline: the bigram closest to the occurrence-weighted median across all bigrams,
+          for scale against how far the outliers below actually fall from typical.
         </p>
         <div v-if="data.drills.overall.text" class="mech-card"><p class="caption drill-row">
           <span>
@@ -73,7 +75,7 @@ const bigramCount = computed(() => data.value?.bigram_rows.length ?? 0)
           <CopyButton :text="data.drills.overall.text" />
         </p></div>
         <p v-else class="caption">Not enough bigram data yet for a drill list.</p>
-        <BigramTable :rows="data.bigram_rows" />
+        <BigramTable :rows="data.bigram_rows" :representative="data.ergonomics.overall_representative" />
       </section>
 
       <section>
@@ -95,8 +97,12 @@ const bigramCount = computed(() => data.value?.bigram_rows.length ?? 0)
         <CategoryDrillCards :category-rows="data.ergonomics.category_rows" :drills="data.drills.categories" />
 
         <h3>Worst offenders by category</h3>
-        <p class="caption">Top 5 slowest bigrams in each category, by median latency.</p>
-        <ErgonomicsDetailTable :detail-rows="data.ergonomics.detail_rows" />
+        <p class="caption">
+          Top 5 slowest bigrams in each category, by median latency, plus a dashed representative row: the
+          bigram closest to that category's own occurrence-weighted median, as a concrete baseline for how much
+          correction the worst 5 above actually need to reach typical.
+        </p>
+        <ErgonomicsDetailTable :detail-rows="data.ergonomics.detail_rows" :category-rows="data.ergonomics.category_rows" />
       </section>
 
       <section>

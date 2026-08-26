@@ -2,13 +2,18 @@
 import { computed } from 'vue'
 import { BIGRAM_TOP_N } from '../lib/constants'
 import { displayBigram } from '../lib/format'
-import type { BigramRow } from '../types/dashboard'
+import type { BigramRow, ErgoRepresentative } from '../types/dashboard'
 import BigramGlyph from './glyphs/BigramGlyph.vue'
 
-const props = defineProps<{ rows: BigramRow[] }>()
+const props = defineProps<{
+  rows: BigramRow[]
+  representative?: ErgoRepresentative | null
+}>()
 
 const top = computed(() => props.rows.slice(0, BIGRAM_TOP_N))
-const maxMedian = computed(() => Math.max(...top.value.map((r) => r.median)))
+const maxMedian = computed(() =>
+  Math.max(...top.value.map((r) => r.median), props.representative?.median ?? 0)
+)
 </script>
 
 <template>
@@ -18,6 +23,13 @@ const maxMedian = computed(() => Math.max(...top.value.map((r) => r.median)))
       <tr><th>bigram</th><th></th><th class="num">n</th><th class="num">median</th><th>relative latency</th></tr>
     </thead>
     <tbody>
+      <tr v-if="representative" class="rep-row">
+        <td class="mono">{{ displayBigram(representative.bigram) }} <span class="rep-tag">(representative)</span></td>
+        <td class="glyph-cell"><BigramGlyph :bigram="representative.bigram" /></td>
+        <td class="num empty-cell">&ndash;</td>
+        <td class="num">{{ representative.median.toFixed(0) }} ms</td>
+        <td><div class="bar-track"><div class="bar-fill rep-fill" :style="{ width: (100 * representative.median / maxMedian) + '%' }"></div></div></td>
+      </tr>
       <tr v-for="r in top" :key="r.bigram">
         <td class="mono">{{ displayBigram(r.bigram) }}</td>
         <td class="glyph-cell"><BigramGlyph :bigram="r.bigram" /></td>
