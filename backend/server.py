@@ -140,7 +140,8 @@ def get_dashboard():
     refresh.refresh_results()
     refresh.refresh_keylogs()
     rebuilt = refresh.rebuild_if_changed()
-    print(f"[server] db rebuild {'ran' if rebuilt else 'skipped (no source changes)'}")
+    if rebuilt:
+        print("db rebuilt")
     return _build_payload()
 
 

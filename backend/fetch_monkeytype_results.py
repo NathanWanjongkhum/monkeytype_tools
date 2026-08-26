@@ -18,6 +18,8 @@ import time
 
 import requests
 
+import clilog
+
 API_BASE = "https://api.monkeytype.com"
 PAGE_LIMIT = 1000
 
@@ -55,17 +57,16 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
 
     results = fetch_all_results(ape_key)
-    print(f"Fetched {len(results)} results")
 
     json_path = os.path.join(out_dir, "monkeytype_results.json")
     with open(json_path, "w") as f:
         json.dump(results, f, indent=2)
-    print(f"Wrote {json_path}")
+    clilog.ok("fetch", f"{len(results)} results -> {json_path}")
 
     try:
         import pandas as pd
     except ImportError:
-        print("pandas not installed, skipping CSV export (pip install pandas)")
+        clilog.warn("fetch", "pandas not installed, skipping CSV export")
         return
 
     df = pd.json_normalize(results)
@@ -73,7 +74,7 @@ def main():
     df = df.sort_values("timestamp")
     csv_path = os.path.join(out_dir, "monkeytype_results.csv")
     df.to_csv(csv_path, index=False)
-    print(f"Wrote {csv_path}")
+    clilog.info("fetch", f"wrote {csv_path}")
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
+import clilog
 import db
 
 HERE = Path(__file__).parent
@@ -43,7 +44,7 @@ MATCH_TOLERANCE_MS = 3_000
 
 def load_results(con: duckdb.DuckDBPyConnection) -> None:
     if not RESULTS_JSON.exists():
-        print(f"no {RESULTS_JSON}, skipping results load")
+        clilog.info("build_db", f"no {RESULTS_JSON.name}, skipping results load")
         return
 
     raw = json.loads(RESULTS_JSON.read_text())
@@ -97,7 +98,7 @@ def load_results(con: duckdb.DuckDBPyConnection) -> None:
     con.register("results_df", df)
     con.execute("INSERT INTO results SELECT * FROM results_df")
     con.unregister("results_df")
-    print(f"loaded {len(df)} result(s)")
+    clilog.info("build_db", f"loaded {len(df)} results")
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +107,7 @@ def load_results(con: duckdb.DuckDBPyConnection) -> None:
 
 def load_keylog(con: duckdb.DuckDBPyConnection) -> None:
     if not KEYLOG_DIR.exists():
-        print(f"no {KEYLOG_DIR}, skipping keylog load")
+        clilog.info("build_db", f"no {KEYLOG_DIR.name}/, skipping keylog load")
         return
 
     session_rows = []
@@ -154,7 +155,6 @@ def load_keylog(con: duckdb.DuckDBPyConnection) -> None:
         con.register("session_df", sdf)
         con.execute("INSERT INTO session_parts SELECT * FROM session_df")
         con.unregister("session_df")
-    print(f"loaded {len(session_rows)} session part file(s)")
 
     if event_rows:
         edf = pd.DataFrame(event_rows)
@@ -162,7 +162,7 @@ def load_keylog(con: duckdb.DuckDBPyConnection) -> None:
         con.register("event_df", edf)
         con.execute("INSERT INTO keylog_events SELECT * FROM event_df")
         con.unregister("event_df")
-    print(f"loaded {len(event_rows)} keylog event(s)")
+    clilog.info("build_db", f"loaded {len(session_rows)} session files, {len(event_rows)} keylog events")
 
 
 # ---------------------------------------------------------------------------
@@ -295,7 +295,7 @@ def segment_and_match(con: duckdb.DuckDBPyConnection) -> None:
         )
         con.unregister("assign_df")
 
-    print(f"segmented {attempt_count} attempt(s), matched {matched_count} to a result")
+    clilog.info("build_db", f"segmented {attempt_count} attempts, matched {matched_count}")
 
 
 # ---------------------------------------------------------------------------
@@ -334,7 +334,7 @@ def remove_phantom_double_spaces(con: duckdb.DuckDBPyConnection) -> None:
           AND keylog_events.seq = victims_df.seq
     """)
     con.unregister("victims_df")
-    print(f"removed {len(victims)} phantom double-space keystroke(s)")
+    clilog.info("build_db", f"removed {len(victims)} phantom double-space keystrokes")
 
 
 def main():
@@ -345,7 +345,7 @@ def main():
     segment_and_match(con)
     remove_phantom_double_spaces(con)
     con.close()
-    print(f"wrote {db.DB_PATH}")
+    clilog.ok("build_db", f"wrote {db.DB_PATH.name}")
 
 
 if __name__ == "__main__":

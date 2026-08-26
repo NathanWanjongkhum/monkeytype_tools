@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 import build_db
+import clilog
 
 HERE = Path(__file__).parent
 DATA_DIR = HERE.parent / "data"
@@ -35,7 +36,7 @@ def load_env_file():
         os.environ.setdefault(key.strip(), val.strip())
 
 
-def call_with_argv(module, argv):
+def call_with_argv(source, module, argv):
     """Call module.main() with a temporary sys.argv. Catches both its
     intentional sys.exit() error paths and any unexpected exception (bad
     API key -> HTTPError, no network -> ConnectionError, etc.). This step
@@ -46,7 +47,7 @@ def call_with_argv(module, argv):
         sys.argv = argv
         module.main()
     except (SystemExit, Exception) as e:
-        print(f"[dashboard] {module.__name__} skipped: {e}")
+        clilog.warn(source, f"skipped: {e}")
     finally:
         sys.argv = old_argv
 
@@ -54,20 +55,17 @@ def call_with_argv(module, argv):
 def refresh_results():
     load_env_file()
     if not os.environ.get("MONKEYTYPE_APE_KEY"):
-        print(
-            "[dashboard] MONKEYTYPE_APE_KEY not set (checked environment and .env) "
-            "- skipping results refresh, using whatever's already local"
-        )
+        clilog.info("fetch", "MONKEYTYPE_APE_KEY not set, using local data only")
         return
     import fetch_monkeytype_results
 
-    call_with_argv(fetch_monkeytype_results, ["fetch_monkeytype_results.py", str(DATA_DIR)])
+    call_with_argv("fetch", fetch_monkeytype_results, ["fetch_monkeytype_results.py", str(DATA_DIR)])
 
 
 def refresh_keylogs():
     import import_keylogs
 
-    call_with_argv(import_keylogs, ["import_keylogs.py"])
+    call_with_argv("keylogs", import_keylogs, ["import_keylogs.py"])
 
 
 def _results_fingerprint():

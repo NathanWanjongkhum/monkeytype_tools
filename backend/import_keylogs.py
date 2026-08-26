@@ -13,6 +13,8 @@ import shutil
 import sys
 from pathlib import Path
 
+import clilog
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -32,7 +34,7 @@ def main():
 
     files = sorted(source.glob("**/*.json"))
     if not files:
-        print(f"No .json files under {source}")
+        clilog.info("keylogs", f"nothing new under {source}")
         return
 
     moved, skipped = 0, 0
@@ -41,7 +43,7 @@ def main():
             with open(f) as fh:
                 json.load(fh)
         except (json.JSONDecodeError, OSError):
-            print(f"skip (unreadable, maybe still being written): {f}")
+            clilog.warn("keylogs", f"skip (unreadable, maybe still being written): {f.name}")
             skipped += 1
             continue
 
@@ -50,14 +52,14 @@ def main():
         target.parent.mkdir(parents=True, exist_ok=True)
 
         if target.exists():
-            print(f"skip (already imported): {rel}")
             skipped += 1
             continue
 
         shutil.move(str(f), str(target))
         moved += 1
 
-    print(f"Imported {moved} file(s), skipped {skipped}, into {dest}")
+    if moved or skipped:
+        clilog.ok("keylogs", f"imported {moved}, skipped {skipped} -> {dest}")
 
     # clean up now-empty date subfolders left behind in source
     for d in sorted(source.glob("*"), reverse=True):

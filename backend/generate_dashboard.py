@@ -1,34 +1,44 @@
 #!/usr/bin/env python3
-"""The single entry point for the typing dashboard: pulls fresh Monkeytype
-results, imports any new keylog sessions sitting in Downloads, force-rebuilds
-typing.duckdb, makes sure the API server (server.py) and the Vite dev server
-(frontend/) are running, and opens the dashboard in a browser, so running
-this script is the whole workflow, same as before. Once both servers are up,
-editing the frontend (frontend/src/) hot-reloads through Vite directly. This
-script doesn't need to be rerun for that, only to force a fresh pull of
-results/keylogs. Opening the dashboard itself also refreshes (see server.py's
-GET /api/dashboard), this script's rebuild is the explicit/unconditional
-version of that same gate (see refresh.py).
+"""One-command entry point for the typing dashboard: refreshes results +
+keylogs, force-rebuilds typing.duckdb, makes sure server.py (:8000) and the
+Vite dev server (:5173) are up, and opens the browser. Frontend edits then
+hot-reload through Vite with no rerun needed - see docs on the refresh gate
+in refresh.py for why opening the dashboard itself also stays fresh.
 
 Usage:
-    python3 generate_dashboard.py             # refresh everything + open it
-    python3 generate_dashboard.py --no-open   # refresh + ensure servers, skip the browser
-    python3 generate_dashboard.py --offline   # skip the API/Downloads refresh, rebuild from local data only
+    python3 generate_dashboard.py             # refresh + open
+    python3 generate_dashboard.py --no-open   # refresh, skip the browser
+    python3 generate_dashboard.py --offline   # rebuild from local data only
 """
 import argparse
 import socket
 import subprocess
 import sys
+import threading
 import time
 import webbrowser
 from pathlib import Path
 
+import clilog
 import refresh
 
 HERE = Path(__file__).parent
 API_PORT = 8000
 VITE_PORT = 5173
 LOG_DIR = HERE / ".dashboard_logs"
+
+SERVICES = {
+    "server": {
+        "port": API_PORT,
+        "cmd": [sys.executable, "-m", "uvicorn", "server:app", "--port", str(API_PORT)],
+        "cwd": HERE,
+    },
+    "vite": {
+        "port": VITE_PORT,
+        "cmd": ["npm", "run", "dev", "--", "--port", str(VITE_PORT)],
+        "cwd": HERE.parent / "frontend",
+    },
+}
 
 
 def _port_open(port: int) -> bool:
@@ -46,48 +56,73 @@ def _wait_for_port(port: int, timeout: float = 20) -> bool:
     return False
 
 
-def ensure_server_running():
-    if _port_open(API_PORT):
-        print(f"[dashboard] API server already running on :{API_PORT}")
-        return
-    LOG_DIR.mkdir(exist_ok=True)
-    log = open(LOG_DIR / "server.log", "w")
-    subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "server:app", "--port", str(API_PORT)],
-        cwd=HERE,
-        stdout=log,
-        stderr=subprocess.STDOUT,
-    )
-    if not _wait_for_port(API_PORT):
-        print(f"[dashboard] warning: API server didn't come up on :{API_PORT} in time, "
-              f"see {LOG_DIR / 'server.log'}")
+def _stream(name: str, proc: subprocess.Popen, log_file) -> None:
+    """Relay a supervised subprocess's output live, tagged and colored by
+    source, while also keeping the raw log file for post-mortems."""
+    for line in proc.stdout:
+        log_file.write(line)
+        line = line.rstrip("\n")
+        if line:
+            print(f"{clilog.tag(name)} {line}")
+    log_file.close()
 
 
-def ensure_vite_running():
-    if _port_open(VITE_PORT):
-        print(f"[dashboard] Vite dev server already running on :{VITE_PORT}")
-        return
+def start_service(name: str) -> subprocess.Popen | None:
+    """Start a service if its port is free. Returns the Popen handle if we
+    started it (and are therefore responsible for it), None if it was
+    already running (someone else owns it)."""
+    spec = SERVICES[name]
+    if _port_open(spec["port"]):
+        clilog.info(name, f"already running on :{spec['port']}")
+        return None
+
     LOG_DIR.mkdir(exist_ok=True)
-    log = open(LOG_DIR / "vite.log", "w")
-    subprocess.Popen(
-        ["npm", "run", "dev", "--", "--port", str(VITE_PORT)],
-        cwd=HERE.parent / "frontend",
-        stdout=log,
-        stderr=subprocess.STDOUT,
+    log_file = open(LOG_DIR / f"{name}.log", "w")
+    proc = subprocess.Popen(
+        spec["cmd"], cwd=spec["cwd"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
     )
-    if not _wait_for_port(VITE_PORT):
-        print(f"[dashboard] warning: Vite dev server didn't come up on :{VITE_PORT} in time, "
-              f"see {LOG_DIR / 'vite.log'}")
+    threading.Thread(target=_stream, args=(name, proc, log_file), daemon=True).start()
+
+    if not _wait_for_port(spec["port"]):
+        clilog.warn(name, f"still not up on :{spec['port']} after 20s, see {LOG_DIR}/{name}.log")
+    return proc
+
+
+def watch(owned: dict[str, subprocess.Popen]) -> None:
+    """Block for as long as the services we started stay up. If one exits
+    early, say so and keep watching whatever's left. Ctrl+C shuts the rest
+    down cleanly."""
+    if not owned:
+        return
+    clilog.info("dashboard", "watching " + ", ".join(owned) + " (Ctrl+C to stop)")
+    alive = dict(owned)
+    try:
+        while alive:
+            for name, proc in list(alive.items()):
+                code = proc.poll()
+                if code is None:
+                    continue
+                del alive[name]
+                log = clilog.ok if code == 0 else clilog.error
+                log(name, f"exited (code {code})" + (f", {', '.join(alive)} still up" if alive else ""))
+            if alive:
+                time.sleep(0.5)
+    except KeyboardInterrupt:
+        print()
+        for name, proc in alive.items():
+            clilog.info(name, "stopping")
+            proc.terminate()
+        for proc in alive.values():
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-open", action="store_true", help="don't launch a browser")
-    ap.add_argument(
-        "--offline",
-        action="store_true",
-        help="skip the API/Downloads refresh, rebuild from local data only",
-    )
+    ap.add_argument("--offline", action="store_true", help="rebuild from local data only")
     args = ap.parse_args()
 
     if not args.offline:
@@ -95,13 +130,14 @@ def main():
         refresh.refresh_keylogs()
     refresh.rebuild_forced()
 
-    ensure_server_running()
-    ensure_vite_running()
+    owned = {name: proc for name in SERVICES if (proc := start_service(name)) is not None}
 
     url = f"http://localhost:{VITE_PORT}"
-    print(f"[dashboard] {url}")
+    clilog.ok("dashboard", url)
     if not args.no_open:
         webbrowser.open(url)
+
+    watch(owned)
 
 
 if __name__ == "__main__":
