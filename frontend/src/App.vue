@@ -22,6 +22,21 @@ const latencyFmt = (v: number) => `${v.toFixed(0)} ms`
 const sqrtScale = (v: number) => Math.sqrt(v)
 
 const bigramCount = computed(() => data.value?.bigram_rows.length ?? 0)
+
+function correlationStrength(r: number): string {
+  const abs = Math.abs(r)
+  if (abs < 0.1) return 'negligible'
+  if (abs < 0.3) return 'weak'
+  if (abs < 0.5) return 'moderate'
+  return 'strong'
+}
+
+function correlationReading(r: number): string {
+  if (Math.abs(r) < 0.1) return 'speed and accuracy are moving essentially independently of each other'
+  return r >= 0
+    ? 'the faster tests have also tended to be the more accurate ones, not less'
+    : 'pushing wpm has tended to cost accuracy'
+}
 </script>
 
 <template>
@@ -50,13 +65,6 @@ const bigramCount = computed(() => data.value?.bigram_rows.length ?? 0)
           lookback window to isolate a slice.
         </p>
         <WpmMasterChart :series="data.series" :wpm-per-hour-typing="data.insights.wpm_per_hour_typing" />
-
-        <h3>Accuracy vs. WPM</h3>
-        <p class="caption">
-          One dot per test, darker = more recent. Tests speed against accuracy to see whether pushing WPM has been
-          costing accuracy.
-        </p>
-        <ScatterChart :series="data.series" />
       </section>
 
       <section>
@@ -155,6 +163,25 @@ const bigramCount = computed(() => data.value?.bigram_rows.length ?? 0)
           :keylog-events="data.keylog_events"
           :has-tags="data.has_tags"
         />
+      </section>
+
+      <section>
+        <h2>Accuracy vs. WPM</h2>
+        <p class="caption">
+          One dot per test, darker = more recent. Tests speed against accuracy to see whether pushing WPM has been
+          costing accuracy - the dashed line is the fitted trend.
+        </p>
+        <ScatterChart
+          :series="data.series"
+          :slope="data.insights.acc_wpm_slope"
+          :intercept="data.insights.acc_wpm_intercept"
+        />
+        <p class="caption footnote">
+          Pearson r = {{ data.insights.acc_wpm_correlation.toFixed(2) }} between accuracy and wpm across
+          {{ data.kpis.n_tests }} tests - a {{ correlationStrength(data.insights.acc_wpm_correlation) }}
+          {{ data.insights.acc_wpm_correlation >= 0 ? 'positive' : 'negative' }} relationship:
+          {{ correlationReading(data.insights.acc_wpm_correlation) }}.
+        </p>
       </section>
 
       <footer>monkeytype_tools &middot; {{ data.kpis.n_tests }} tests &middot; {{ data.keylog_events }} logged keystrokes</footer>

@@ -4,7 +4,7 @@ import { useNearestPointHover, type HoverPoint } from '../composables/useNearest
 import { niceTicks } from '../lib/chartMath'
 import type { SeriesPoint } from '../types/dashboard'
 
-const props = defineProps<{ series: SeriesPoint[] }>()
+const props = defineProps<{ series: SeriesPoint[]; slope: number; intercept: number }>()
 
 const width = 860
 const height = 300
@@ -18,7 +18,11 @@ const plotH = height - padT - padB
 const wpm = computed(() => props.series.map((s) => s.wpm))
 const acc = computed(() => props.series.map((s) => s.acc))
 
-const xTicks = computed(() => niceTicks(0, Math.max(...wpm.value) * 1.1, 5))
+// Fit to the actual wpm spread instead of anchoring at 0 - real wpm values
+// cluster in a narrow band (e.g. 40-95), so a 0-start axis wastes roughly
+// half the plot on a range with no data in it. Mirrors how the y-axis
+// (acc) already floors near the real data instead of at 0.
+const xTicks = computed(() => niceTicks(Math.min(...wpm.value) - 2, Math.max(...wpm.value) * 1.05, 5))
 const xMin = computed(() => xTicks.value[0])
 const xMax = computed(() => xTicks.value[xTicks.value.length - 1])
 const yTicks = computed(() => niceTicks(Math.min(80, Math.min(...acc.value) - 2), 100, 4))
@@ -31,6 +35,27 @@ function xOf(v: number) {
 function yOf(v: number) {
   return padT + (1 - (v - yMin.value) / (yMax.value - yMin.value)) * plotH
 }
+
+// Regression line (acc = slope*wpm + intercept) clipped to the visible
+// plot rectangle, so it terminates cleanly at the axis edges instead of
+// running off the top/bottom when the fitted line exits the acc domain
+// before it exits the wpm domain.
+const trendLine = computed(() => {
+  const { slope, intercept } = props
+  let x0 = xMin.value
+  let x1 = xMax.value
+  let y0 = slope * x0 + intercept
+  let y1 = slope * x1 + intercept
+
+  if (slope !== 0) {
+    if (y0 > yMax.value) { y0 = yMax.value; x0 = (yMax.value - intercept) / slope }
+    else if (y0 < yMin.value) { y0 = yMin.value; x0 = (yMin.value - intercept) / slope }
+    if (y1 > yMax.value) { y1 = yMax.value; x1 = (yMax.value - intercept) / slope }
+    else if (y1 < yMin.value) { y1 = yMin.value; x1 = (yMin.value - intercept) / slope }
+  }
+
+  return { x1: xOf(x0), y1: yOf(y0), x2: xOf(x1), y2: yOf(y1) }
+})
 
 const points = computed<(HoverPoint<SeriesPoint> & { opacity: number })[]>(() => {
   const n = props.series.length
@@ -68,6 +93,13 @@ function tooltipDate(ts: string) {
       <text v-for="t in yTicks" :key="'ylbl' + t" :x="padL - 8" :y="yOf(t)" class="tick-label" text-anchor="end" dominant-baseline="middle">{{ Math.round(t) }}%</text>
       <text v-for="t in xTicks" :key="'xlbl' + t" :x="xOf(t)" :y="padT + plotH + 20" class="tick-label" text-anchor="middle">{{ Math.round(t) }}</text>
       <line :x1="padL" :y1="padT + plotH" :x2="width - padR" :y2="padT + plotH" class="axis-line" />
+      <line
+        :x1="trendLine.x1"
+        :y1="trendLine.y1"
+        :x2="trendLine.x2"
+        :y2="trendLine.y2"
+        class="trend-line-regression"
+      />
       <circle
         v-for="(p, i) in points"
         :key="i"

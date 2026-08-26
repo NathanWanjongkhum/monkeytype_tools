@@ -284,6 +284,7 @@ def compute_insights(df, bigram_rows):
     acc_std_second = float(df["acc"].iloc[half:].std()) if len(df) - half >= 2 else None
 
     acc_wpm_r = float(np.corrcoef(df["acc"], df["wpm"])[0, 1]) if len(df) >= 2 else 0.0
+    acc_wpm_slope, acc_wpm_intercept, _ = linreg(df["wpm"], df["acc"])
 
     # Speed change per hour of practice: regress wpm against cumulative
     # practice time (test_duration summed up to and including each test,
@@ -300,6 +301,8 @@ def compute_insights(df, bigram_rows):
         "acc_std_first_half": acc_std_first,
         "acc_std_second_half": acc_std_second,
         "acc_wpm_correlation": acc_wpm_r,
+        "acc_wpm_slope": acc_wpm_slope,
+        "acc_wpm_intercept": acc_wpm_intercept,
         "wpm_per_hour_typing": wpm_per_hour_slope,
         "has_tags": False,  # set by caller once tag data is checked
         "bigram_rows": bigram_rows,

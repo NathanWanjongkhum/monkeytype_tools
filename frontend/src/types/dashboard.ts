@@ -30,6 +30,8 @@ export interface Insights {
   acc_std_first_half: number | null
   acc_std_second_half: number | null
   acc_wpm_correlation: number
+  acc_wpm_slope: number
+  acc_wpm_intercept: number
   wpm_per_hour_typing: number
 }
 

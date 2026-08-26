@@ -59,6 +59,7 @@ h1 { font-size: 22px; margin: 0 0 4px; }
 h2 { font-size: 15px; font-weight: 600; margin: 0 0 12px; color: var(--text-primary); }
 h3 { font-size: 13px; font-weight: 600; margin: 28px 0 10px; color: var(--text-secondary); }
 .caption { color: var(--text-muted); font-size: 12px; margin: -6px 0 14px; }
+.caption.footnote { font-style: italic; font-size: 11px; }
 section { margin-bottom: 36px; }
 
 .kpi-groups { display: flex; flex-direction: column; gap: 18px; }
@@ -96,6 +97,7 @@ section { margin-bottom: 36px; }
 .end-label { fill: var(--text-primary); font-size: 12px; font-weight: 600; }
 .scatter-dot { fill: var(--series-1); }
 .scatter-hover-ring { fill: none; stroke: var(--series-1); stroke-width: 2; pointer-events: none; }
+.trend-line-regression { fill: none; stroke: var(--trend-avg100); stroke-width: 2; stroke-dasharray: 6 4; stroke-linecap: round; }
 .crosshair-line { stroke: var(--axis-line); stroke-width: 1; }
 .crosshair-dot { fill: var(--series-1); stroke: var(--surface-1); stroke-width: 2; }
 
