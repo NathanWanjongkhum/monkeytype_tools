@@ -15,8 +15,11 @@
     "@types/node": "26.3.0",
     "@vitejs/plugin-vue": "6.0.8",
     "@vue/tsconfig": "0.9.1",
-    "typescript": "^5.9.3",
+    "typescript": "npm:typescript-native-bridge@6.0.3-bridge.15.tsgo.7.0.2",
     "vite": "8.2.2",
     "vue-tsc": "3.3.11"
+  },
+  "overrides": {
+    "typescript": "$typescript"
   }
 }
