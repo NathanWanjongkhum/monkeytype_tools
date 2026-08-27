@@ -27,8 +27,7 @@ DATA_DIR = HERE.parent / "data"
 WORDLIST_PATH = HERE / "assets" / "english_10k.json"
 OUT_PATH = DATA_DIR / "drill_practice.txt"
 
-TARGET_BIGRAMS_N = 20      # how many of your slowest qualifying bigrams to *consider*
-TARGET_WORDS_N = 50        # word budget for one generated test; caps how many of those get drilled
+TARGET_BIGRAMS_N = 20      # how many of your slowest qualifying bigrams to drill
 CATEGORY_TARGET_BIGRAMS_N = 8  # fewer per category, since there are 4 categories, not 1
 MIN_REPEAT, MAX_REPEAT = 3, 15
 MIN_WORDS_PER_BIGRAM, MAX_WORDS_PER_BIGRAM = 1, 4  # phrase length, inverse of repeat
@@ -60,7 +59,7 @@ def words_containing(wordlist, bigram, limit):
     return out
 
 
-def build_drill_entries(bigram_rows, wordlist, target_n=TARGET_BIGRAMS_N, words_budget=TARGET_WORDS_N):
+def build_drill_entries(bigram_rows, wordlist, target_n=TARGET_BIGRAMS_N):
     """Pick the slowest qualifying bigrams (bigram_rows is already sorted
     slowest-first and past MIN_SAMPLES, same as the dashboard's "Slowest
     bigrams" table), find real Monkeytype-list words containing each, and
@@ -70,24 +69,14 @@ def build_drill_entries(bigram_rows, wordlist, target_n=TARGET_BIGRAMS_N, words_
     while near-miss bigrams get a longer, more varied phrase repeated only
     a few times (context coverage instead of rote drilling). Since drills
     regenerate from fresh typing data, a bigram graduates from the tight
-    loop toward the varied phrase on its own as it gets faster.
-
-    `target_n` only bounds how many bigrams are *candidates* — the loop below
-    stops adding entries once `words_budget` total words have been placed, so
-    a single generated test stays a test-sized paste (one MIN_REPEAT..MAX_REPEAT
-    x MIN_WORDS_PER_BIGRAM..MAX_WORDS_PER_BIGRAM entry per qualifying bigram,
-    stacked up to the budget) rather than growing unbounded with target_n."""
+    loop toward the varied phrase on its own as it gets faster."""
     targets = [r for r in bigram_rows if len(r["bigram"]) == 2][:target_n]
     if not targets:
         return [], []
 
     fastest_median = min(r["median"] for r in targets)
     entries, skipped = [], []
-    words_used = 0
     for r in targets:
-        remaining = words_budget - words_used
-        if remaining <= 0:
-            break
         weight = r["median"] / fastest_median
         repeat = max(MIN_REPEAT, min(MAX_REPEAT, round(MIN_REPEAT * weight)))
         words_n = max(MIN_WORDS_PER_BIGRAM, min(MAX_WORDS_PER_BIGRAM, round(MAX_WORDS_PER_BIGRAM / weight)))
@@ -95,12 +84,7 @@ def build_drill_entries(bigram_rows, wordlist, target_n=TARGET_BIGRAMS_N, words_
         if not words:
             skipped.append(r["bigram"])
             continue
-        # Clip repeat (never below 1) so a single entry can't blow the
-        # remaining budget, rather than dropping the whole bigram over it.
-        if len(words) * repeat > remaining:
-            repeat = max(1, remaining // len(words))
         entries.append({"bigram": r["bigram"], "phrase": " ".join(words), "repeat": repeat})
-        words_used += len(words) * repeat
     return entries, skipped
 
 
