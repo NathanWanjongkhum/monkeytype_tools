@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Monkeytype Keystroke Logger
 // @namespace    typing-research
-// @version      3.5.2
+// @version      3.6
 // @description  Logs per-keystroke timestamps and the active test config on Monkeytype, periodically saved as session files into Downloads, for bigram-latency analysis the public API doesn't expose. Also fetches generated drills from the local dashboard backend, loads them into Monkeytype's custom-text mode, and tags completions for closed-loop validation.
 // @match        https://monkeytype.com/*
 // @grant        GM_download
@@ -192,14 +192,12 @@
 
   // --- Drill automation (docs/adr/0003-drill-completion-validation.md) ---
   //
-  // NOTE: fillCustomTextForm()'s selectors were confirmed live (its
-  // textarea/submit-button markup was inspected by hand). Everything else
-  // here - the "custom"/"change" button text-match in
-  // openCustomTextPopupAndFill(), and the tag popup's structure in
-  // findTagToggle() - was reverse-engineered from Monkeytype's bundle or
-  // guessed, not driven end-to-end live. Treat those as best-effort and
-  // adjust if they stop matching, the same way lastResolvedLetterClasses()
-  // above is already flagged.
+  // NOTE: fillCustomTextForm()'s and the tag popup's (findTagPopup/
+  // findTagToggle) markup were both confirmed live, by hand. The one
+  // remaining unconfirmed piece is the "custom"/"change" button text-match
+  // in openCustomTextPopupAndFill() - treat that as best-effort and adjust
+  // if it stops matching, the same way lastResolvedLetterClasses() above is
+  // already flagged.
 
   const BACKEND_BASE = "http://127.0.0.1:8000";
   const PENDING_DRILL_KEY = "mt-logger-pending-drill";
@@ -353,17 +351,23 @@
     document.body.appendChild(panel);
   }
 
-  function findTagToggle(tagName) {
-    // Unverified: only the editTagsButton itself (with its data-result-id /
-    // data-active-tag-ids attributes) was confirmed against the live site.
-    // The popup this opens was not inspected live, so this falls back to a
-    // generic text-match rather than a guessed class name - find a
-    // clickable element whose own text is exactly the tag's display name
-    // (Monkeytype turns spaces into underscores in tag names). Adjust this
-    // against the live popup if it keeps missing.
-    const candidates = document.querySelectorAll("button, .tag, [class*='tag']");
-    for (const el of candidates) {
-      if (el.textContent && el.textContent.trim() === tagName) return el;
+  function findTagPopup() {
+    // Confirmed live: "Edit result tags" popup is a `.modal` containing one
+    // <button type="button"> per tag (label text) plus a "save" button.
+    for (const modal of document.querySelectorAll(".modal")) {
+      if (modal.textContent.includes("Edit result tags")) return modal;
+    }
+    return null;
+  }
+
+  function findTagToggle(popup, tagName) {
+    // Confirmed live: tag buttons render underscores in the name as spaces
+    // (e.g. "drill-row_skip" -> "drill-row skip"), so normalize both sides
+    // before comparing rather than matching the stored name literally.
+    const normalize = (s) => s.trim().toLowerCase().replace(/_/g, " ");
+    const target = normalize(tagName);
+    for (const btn of popup.querySelectorAll("button")) {
+      if (normalize(btn.textContent || "") === target) return btn;
     }
     return null;
   }
@@ -374,27 +378,33 @@
     editTagsButton.click();
     // Popup rendering is async; give it a beat before searching for the tag.
     setTimeout(() => {
-      const toggle = findTagToggle(tagName);
-      if (toggle) {
-        // Logs the actual matched element, not just "found something" - a
-        // false-positive text-match (e.g. an unrelated label with the same
-        // text) would otherwise look identical to a real success in the
-        // console. Compare this against what actually got tagged (or
-        // didn't) on Monkeytype to tell which failure mode this is.
-        console.log(`[mt-logger] clicking tag toggle for "${tagName}":`, toggle.outerHTML.slice(0, 200));
-        toggle.click();
-      } else {
+      const popup = findTagPopup();
+      if (!popup) {
+        console.warn("[mt-logger] tag popup did not open (no .modal containing \"Edit result tags\" found)");
+        clearPendingDrill();
+        return;
+      }
+      const toggle = findTagToggle(popup, tagName);
+      if (!toggle) {
         console.warn(
           `[mt-logger] could not find tag "${tagName}" in the tag editor - ` +
-            "create it once in Monkeytype's UI (Account > tags), and check " +
-            "findTagToggle()'s selector against the live popup if this keeps failing"
+            "create it once in Monkeytype's UI (Account > tags) if it doesn't exist yet"
         );
+        clearPendingDrill();
+        return;
       }
-      // Deliberately NOT closing the popup here (previously did
-      // document.body.click()) - if the tag picker needs an explicit
-      // save/confirm, or if clicking outside cancels instead of committing,
-      // that click would silently discard the tag selection above. Leave it
-      // open; close it by hand once the real save mechanism is confirmed.
+      toggle.click();
+      // Clicking a tag button only toggles local selection state - nothing
+      // persists until "save" is clicked (confirmed live: this was the
+      // actual reason an earlier version's "applied tag" log didn't show up
+      // on Monkeytype at all).
+      const saveBtn = findButtonByText("save", popup);
+      if (saveBtn) {
+        saveBtn.click();
+        console.log(`[mt-logger] applied tag "${tagName}" to completed drill`);
+      } else {
+        console.warn(`[mt-logger] toggled "${tagName}" but could not find the popup's "save" button - not persisted`);
+      }
       clearPendingDrill();
     }, 300);
   }
