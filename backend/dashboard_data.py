@@ -142,13 +142,31 @@ def load_bigram_rows_db(con):
     Session, because a Session can chain several tests back-to-back with no
     detectable gap (checked: as little as ~0ms between them), so pairing
     across a session would wrongly treat "last key of test N" + "first key
-    of test N+1" as a real bigram. attempt_id already carries that boundary."""
+    of test N+1" as a real bigram. attempt_id already carries that boundary.
+
+    Only pulls events from Attempts matched to a real Monkeytype result
+    (attempts.result_id IS NOT NULL). An unmatched Attempt is keystrokes the
+    segmenter couldn't tie to any submitted test - old keylogger versions
+    logged these unconditionally whenever #wordsInput wasn't found (settings,
+    profile, leaderboard search, ...), so they're not trustworthy test
+    typing: confirmed against this data, ~25% of attempts were unmatched,
+    averaging ~34 events vs. ~414 for matched ones, and unmatched attempts
+    are exactly where bigrams that never occur in real test content (e.g.
+    "==", "atm") were coming from. See docs/adr/0001-duckdb-derived-cache.md
+    for why unmatched Attempts are kept in the DB rather than discarded -
+    they still need excluding here, at the point stats get computed."""
     rows = con.execute(f"""
-        WITH ordered AS (
+        WITH matched_events AS (
+            SELECT ke.attempt_id, ke.ts_ms, ke.key
+            FROM keylog_events ke
+            JOIN attempts a ON a.attempt_id = ke.attempt_id
+            WHERE a.result_id IS NOT NULL
+        ),
+        ordered AS (
             SELECT attempt_id, ts_ms, key,
                    LAG(key) OVER (PARTITION BY attempt_id ORDER BY ts_ms) AS prev_key,
                    LAG(ts_ms) OVER (PARTITION BY attempt_id ORDER BY ts_ms) AS prev_ts
-            FROM keylog_events
+            FROM matched_events
         ),
         pairs AS (
             SELECT prev_key || key AS bigram, ts_ms - prev_ts AS gap
@@ -163,7 +181,11 @@ def load_bigram_rows_db(con):
         ORDER BY median DESC
     """).fetchdf().to_dict("records")
 
-    n_events = con.execute("SELECT count(*) FROM keylog_events").fetchone()[0]
+    n_events = con.execute("""
+        SELECT count(*) FROM keylog_events ke
+        JOIN attempts a ON a.attempt_id = ke.attempt_id
+        WHERE a.result_id IS NOT NULL
+    """).fetchone()[0]
     n_sessions = con.execute(
         "SELECT count(DISTINCT session_id) FROM session_parts"
     ).fetchone()[0]
@@ -180,20 +202,33 @@ def load_key_stats_db(con):
     attempt-scoped LAG pairing and MAX_GAP_MS/MIN_SAMPLES rules as
     load_bigram_rows_db, but grouped by the destination key instead of the
     pair: "how slow is it to reach this key" rather than "how slow is this
-    specific two-key sequence"."""
+    specific two-key sequence". Also matches load_bigram_rows_db in only
+    counting events from Attempts matched to a real result - see that
+    function's docstring for why unmatched Attempts (stray typing outside
+    an actual test) get excluded here rather than just in the DB."""
     freq_by_key = {}
-    for char, n in con.execute(
-        "SELECT key, count(*) FROM keylog_events WHERE length(key) = 1 GROUP BY key"
-    ).fetchall():
+    for char, n in con.execute("""
+        SELECT ke.key, count(*)
+        FROM keylog_events ke
+        JOIN attempts a ON a.attempt_id = ke.attempt_id
+        WHERE length(ke.key) = 1 AND a.result_id IS NOT NULL
+        GROUP BY ke.key
+    """).fetchall():
         phys_key = CHAR_TO_KEY.get(char, char)
         freq_by_key[phys_key] = freq_by_key.get(phys_key, 0) + n
 
     gap_rows = con.execute(f"""
-        WITH ordered AS (
+        WITH matched_events AS (
+            SELECT ke.attempt_id, ke.ts_ms, ke.key
+            FROM keylog_events ke
+            JOIN attempts a ON a.attempt_id = ke.attempt_id
+            WHERE a.result_id IS NOT NULL
+        ),
+        ordered AS (
             SELECT attempt_id, ts_ms, key,
                    LAG(key) OVER (PARTITION BY attempt_id ORDER BY ts_ms) AS prev_key,
                    LAG(ts_ms) OVER (PARTITION BY attempt_id ORDER BY ts_ms) AS prev_ts
-            FROM keylog_events
+            FROM matched_events
         )
         SELECT key, ts_ms - prev_ts AS gap
         FROM ordered
