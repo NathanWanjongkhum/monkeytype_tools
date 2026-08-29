@@ -39,10 +39,14 @@
 //   1. Monkeytype settings > word delimiter > pipe (drill_practice*.txt
 //      groups words with "|"; this is what makes that mean "separate word"
 //      instead of one long run-on word).
-//   2. Create the tags drill-overall, drill-sfb, drill-row_skip,
-//      drill-awkward_roll, drill-lsb once (Account > tags) - tags are
-//      referenced by ID, not name, so they must exist before the script can
-//      find them.
+//   2. Create the tags drill-overall, drill-sfb, drill-row_skip, drill-roll,
+//      drill-lsb once (Account > tags) - tags are referenced by ID, not
+//      name, so they must exist before the script can find them. Without
+//      any tags at all, Monkeytype hides the results screen's whole tags
+//      section, so this step also has to happen before tagging can work at
+//      all, not just before the right tag can be found. drill-roll (not
+//      drill-awkward_roll) because Monkeytype's tag-name length limit
+//      rejects the full category name - see DRILL_TAG_OVERRIDES below.
 
 (function () {
   "use strict";
@@ -200,8 +204,13 @@
   const BACKEND_BASE = "http://127.0.0.1:8000";
   const PENDING_DRILL_KEY = "mt-logger-pending-drill";
 
+  // Exceptions to the `drill-<category>` naming convention, for categories
+  // whose name is too long for Monkeytype's tag-name length limit. Keep in
+  // sync with dashboard_data.py's DRILL_TAG_OVERRIDES.
+  const DRILL_TAG_OVERRIDES = { awkward_roll: "drill-roll" };
+
   function tagNameForCategory(key) {
-    return `drill-${key}`;
+    return DRILL_TAG_OVERRIDES[key] || `drill-${key}`;
   }
 
   function loadPendingDrill() {

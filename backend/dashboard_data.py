@@ -218,6 +218,16 @@ def load_bigram_pairs_db(con):
     """).fetchdf()
 
 
+DRILL_TAG_OVERRIDES = {"awkward_roll": "drill-roll"}  # keep in sync with the userscript's DRILL_TAG_OVERRIDES
+
+
+def tag_name_for_category(key):
+    """`drill-<category>`, except where the category name itself is too
+    long for Monkeytype's tag-name length limit (awkward_roll -> drill-roll,
+    created by hand to fit)."""
+    return DRILL_TAG_OVERRIDES.get(key, f"drill-{key}")
+
+
 def load_tagged_drill_completions_db(con):
     """Genuine drill completions: a matched Attempt whose Result carries the
     `drill-<category>` tag that the keylogger userscript applies after a
@@ -246,7 +256,7 @@ def load_tagged_drill_completions_db(con):
         if not manifest or not manifest.get("category") or not manifest.get("bigrams"):
             continue
         tags = list(r["tags"]) if r["tags"] is not None else []
-        expected_tag = f"drill-{manifest['category']}"
+        expected_tag = tag_name_for_category(manifest["category"])
         if expected_tag not in tags:
             continue
         completions.append({
