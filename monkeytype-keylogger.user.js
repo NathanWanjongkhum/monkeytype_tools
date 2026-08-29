@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Monkeytype Keystroke Logger
 // @namespace    typing-research
-// @version      3.5
+// @version      3.5.1
 // @description  Logs per-keystroke timestamps and the active test config on Monkeytype, periodically saved as session files into Downloads, for bigram-latency analysis the public API doesn't expose. Also fetches generated drills from the local dashboard backend, loads them into Monkeytype's custom-text mode, and tags completions for closed-loop validation.
 // @match        https://monkeytype.com/*
 // @grant        GM_download
@@ -294,11 +294,13 @@
       console.warn("[mt-logger] no drill available for", manifest && manifest.key);
       return;
     }
-    // Word delimiter must already be set to "pipe" in Monkeytype's own
-    // settings (a one-time setup step, same as creating the drill-* tags -
-    // see the file header) so drill_practice*.txt's "|" grouping parses as
-    // separate words rather than one giant run-on word.
-    const text = manifest.text.split("|").join(" ");
+    // manifest.text is already pipe-delimited exactly as drill_practice*.txt
+    // is meant to be pasted - passed through unmodified. Word delimiter must
+    // already be set to "pipe" in Monkeytype's own settings (a one-time
+    // setup step, same as creating the drill-* tags - see the file header)
+    // so this "|" grouping parses as separate words instead of one long
+    // run-on word.
+    const text = manifest.text;
 
     pendingDrill = {
       category: manifest.key,
