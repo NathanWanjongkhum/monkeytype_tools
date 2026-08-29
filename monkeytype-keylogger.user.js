@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Monkeytype Keystroke Logger
 // @namespace    typing-research
-// @version      3.2
+// @version      3.3
 // @description  Logs per-keystroke timestamps and the active test config on Monkeytype, periodically saved as session files into Downloads, for bigram-latency analysis the public API doesn't expose.
 // @match        https://monkeytype.com/*
 // @grant        GM_download
@@ -59,13 +59,23 @@
       // resolved letters on the second keydown; it never advanced the test.
       if (e.repeat) return;
       if (e.key.length > 1 && e.key !== "Backspace" && e.key !== " ") return;
-      // Only log keys typed into the actual test input, not keys typed
-      // elsewhere on the page (leaderboard search, settings, username, ...).
-      // Best-effort like the letter-class lookup above: if #wordsInput ever
-      // stops matching (site markup changed), this check just no-ops instead
-      // of silently dropping all data. Check with devtools if that happens.
+      // Only log keys typed into the actual test input while a test is
+      // actively being typed - not keys typed elsewhere on the page
+      // (leaderboard search, settings, account/profile fields, ...) and not
+      // idle focus on #wordsInput with no test running (start screen,
+      // between quick-restarts, results screen). Fails closed on both
+      // checks: if #wordsInput or the active word can't be found (site
+      // markup changed, or we're simply on a different monkeytype.com route
+      // that doesn't have a test screen at all - @match is the whole site),
+      // drop the event instead of logging it. A gap in the data is visible
+      // and harmless; a phantom bigram from leaked keystrokes silently
+      // corrupts stats. Confirmed against typing.duckdb: before this check
+      // existed, ~25% of "attempts" never matched any real test result, and
+      // averaged ~34 events vs. ~414 for real ones - stray typing bleeding
+      // into bigram/key stats as if it were test content.
       const wordsInput = document.getElementById("wordsInput");
-      if (wordsInput && document.activeElement !== wordsInput) return;
+      if (document.activeElement !== wordsInput) return;
+      if (!document.querySelector("#words .word.active")) return;
       const ts = Date.now();
       const key = e.key;
       // deferred to macrotask: our listener is capture-phase on document,
