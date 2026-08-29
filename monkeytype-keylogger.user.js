@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Monkeytype Keystroke Logger
 // @namespace    typing-research
-// @version      3.5.1
+// @version      3.5.2
 // @description  Logs per-keystroke timestamps and the active test config on Monkeytype, periodically saved as session files into Downloads, for bigram-latency analysis the public API doesn't expose. Also fetches generated drills from the local dashboard backend, loads them into Monkeytype's custom-text mode, and tags completions for closed-loop validation.
 // @match        https://monkeytype.com/*
 // @grant        GM_download
@@ -376,8 +376,13 @@
     setTimeout(() => {
       const toggle = findTagToggle(tagName);
       if (toggle) {
+        // Logs the actual matched element, not just "found something" - a
+        // false-positive text-match (e.g. an unrelated label with the same
+        // text) would otherwise look identical to a real success in the
+        // console. Compare this against what actually got tagged (or
+        // didn't) on Monkeytype to tell which failure mode this is.
+        console.log(`[mt-logger] clicking tag toggle for "${tagName}":`, toggle.outerHTML.slice(0, 200));
         toggle.click();
-        console.log(`[mt-logger] applied tag "${tagName}" to completed drill`);
       } else {
         console.warn(
           `[mt-logger] could not find tag "${tagName}" in the tag editor - ` +
@@ -385,7 +390,11 @@
             "findTagToggle()'s selector against the live popup if this keeps failing"
         );
       }
-      document.body.click(); // best-effort: close the popup
+      // Deliberately NOT closing the popup here (previously did
+      // document.body.click()) - if the tag picker needs an explicit
+      // save/confirm, or if clicking outside cancels instead of committing,
+      // that click would silently discard the tag selection above. Leave it
+      // open; close it by hand once the real save mechanism is confirmed.
       clearPendingDrill();
     }, 300);
   }
