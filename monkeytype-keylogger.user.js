@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Monkeytype Keystroke Logger
 // @namespace    typing-research
-// @version      3.4
+// @version      3.5
 // @description  Logs per-keystroke timestamps and the active test config on Monkeytype, periodically saved as session files into Downloads, for bigram-latency analysis the public API doesn't expose. Also fetches generated drills from the local dashboard backend, loads them into Monkeytype's custom-text mode, and tags completions for closed-loop validation.
 // @match        https://monkeytype.com/*
 // @grant        GM_download
@@ -23,15 +23,26 @@
 //
 // A small button panel (bottom-right) fetches the most recently generated
 // drill from the local dashboard backend (127.0.0.1:8000) per
-// docs/adr/0003-drill-completion-validation.md, and loads it into
-// Monkeytype's own custom-text storage. If a drill is pending when a
+// docs/adr/0003-drill-completion-validation.md, and drives Monkeytype's own
+// "custom" mode > "change" text popup to load it - customText/
+// customTextSettings in localStorage turned out to be Monkeytype's *saved
+// presets* library, not the live/active test state, so this fills and
+// submits the popup's real form instead. If a drill is pending when a
 // custom test completes, the saved envelope's `drill` field records exactly
 // which bigrams were targeted (the drill files themselves regenerate from
 // live data on every dashboard load, so that can't be re-derived later from
 // whatever's currently on disk), and the script attempts to tag the result
 // with `drill-<category>` so later analysis can tell a genuine drill
-// completion apart from any other typing. Tags must already exist in
-// Monkeytype (created once, by hand) before this can find them by name.
+// completion apart from any other typing.
+//
+// One-time setup before the drill panel works:
+//   1. Monkeytype settings > word delimiter > pipe (drill_practice*.txt
+//      groups words with "|"; this is what makes that mean "separate word"
+//      instead of one long run-on word).
+//   2. Create the tags drill-overall, drill-sfb, drill-row_skip,
+//      drill-awkward_roll, drill-lsb once (Account > tags) - tags are
+//      referenced by ID, not name, so they must exist before the script can
+//      find them.
 
 (function () {
   "use strict";
@@ -177,17 +188,17 @@
 
   // --- Drill automation (docs/adr/0003-drill-completion-validation.md) ---
   //
-  // NOTE: the localStorage schema below (customText / customTextSettings)
-  // and the tag-editor popup's internal structure were reverse-engineered
-  // from Monkeytype's live bundle, not confirmed by actually driving the UI
-  // end-to-end from here. Treat applyDrill()'s "does this actually start a
-  // custom test on reload" and findTagToggle()'s selector as best-effort -
-  // verify against the live site and adjust if either stops working, the
-  // same way lastResolvedLetterClasses() above is already flagged.
+  // NOTE: fillCustomTextForm()'s selectors were confirmed live (its
+  // textarea/submit-button markup was inspected by hand). Everything else
+  // here - the "custom"/"change" button text-match in
+  // openCustomTextPopupAndFill(), and the tag popup's structure in
+  // findTagToggle() - was reverse-engineered from Monkeytype's bundle or
+  // guessed, not driven end-to-end live. Treat those as best-effort and
+  // adjust if they stop matching, the same way lastResolvedLetterClasses()
+  // above is already flagged.
 
   const BACKEND_BASE = "http://127.0.0.1:8000";
   const PENDING_DRILL_KEY = "mt-logger-pending-drill";
-  const DRILL_TEXT_NAME = "__drill_active__"; // fixed slot in Monkeytype's own customText map - overwritten every time, not a saved preset (0003)
 
   function tagNameForCategory(key) {
     return `drill-${key}`;
@@ -220,41 +231,74 @@
       : (data.categories || []).find((c) => c.key === categoryKey) || null;
   }
 
+  function findButtonByText(text, root = document) {
+    const normalized = text.trim().toLowerCase();
+    for (const el of root.querySelectorAll("button")) {
+      if (el.textContent && el.textContent.trim().toLowerCase() === normalized) return el;
+    }
+    return null;
+  }
+
+  function fillCustomTextForm(text) {
+    // Confirmed live against monkeytype.com (unlike the rest of this
+    // section): the popup's own textarea is `textarea#text`, its submit is
+    // `button[type=submit]` reading "ok" in the same <form>. Sets .value via
+    // the native setter + dispatches "input" so the popup's own form-state
+    // library (bound via onInput, not a raw DOM value read) picks it up -
+    // just setting .value directly is invisible to that kind of binding.
+    const textarea = document.querySelector("textarea#text");
+    if (!textarea) return false;
+    const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
+    setValue.call(textarea, text);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+
+    const form = textarea.closest("form");
+    const okButton = (form && form.querySelector('button[type="submit"]')) || findButtonByText("ok");
+    if (!okButton) return false;
+    okButton.click();
+    return true;
+  }
+
+  function openCustomTextPopupAndFill(text, attempt = 0) {
+    // Two-step flow confirmed by hand: select "custom" mode, then a
+    // "change" button appears (or the popup opens directly, first time) to
+    // reopen the text popup. Unlike fillCustomTextForm() above, neither
+    // trigger's selector was confirmed live - falls back to matching
+    // visible button text, same as findTagToggle() below. If Monkeytype's
+    // wording differs from "custom"/"change"/"ok", update the strings here.
+    if (fillCustomTextForm(text)) return;
+
+    const customModeBtn = findButtonByText("custom");
+    if (customModeBtn) customModeBtn.click();
+
+    setTimeout(() => {
+      if (fillCustomTextForm(text)) return;
+      const changeBtn = findButtonByText("change");
+      if (changeBtn) {
+        changeBtn.click();
+        setTimeout(() => {
+          if (!fillCustomTextForm(text)) {
+            console.warn('[mt-logger] found "change" but could not fill the popup - check fillCustomTextForm() selectors live');
+          }
+        }, 200);
+      } else if (attempt < 1) {
+        setTimeout(() => openCustomTextPopupAndFill(text, attempt + 1), 300); // mode switch may need a beat to render "change"
+      } else {
+        console.warn('[mt-logger] could not find "custom" mode or "change" button - open custom mode manually once, then retry');
+      }
+    }, 200);
+  }
+
   function applyDrill(manifest) {
     if (!manifest || !manifest.text) {
       console.warn("[mt-logger] no drill available for", manifest && manifest.key);
       return;
     }
-    const words = manifest.text.split("|");
-
-    let customText = {};
-    try {
-      customText = JSON.parse(localStorage.getItem("customText") || "{}");
-    } catch (e) {
-      /* fall through with empty map */
-    }
-    customText[DRILL_TEXT_NAME] = words.join(" ");
-    localStorage.setItem("customText", JSON.stringify(customText));
-
-    let customTextSettings = { mode: "word", pipeDelimiter: true, limit: { mode: "word", value: words.length } };
-    try {
-      customTextSettings = {
-        ...customTextSettings,
-        ...JSON.parse(localStorage.getItem("customTextSettings") || "{}"),
-      };
-    } catch (e) {
-      /* fall through with the default above */
-    }
-    customTextSettings.pipeDelimiter = true; // required for drill_practice*.txt's "|" grouping to parse as intended
-    localStorage.setItem("customTextSettings", JSON.stringify(customTextSettings));
-
-    try {
-      const config = JSON.parse(localStorage.getItem("config") || "{}");
-      config.mode = "custom";
-      localStorage.setItem("config", JSON.stringify(config));
-    } catch (e) {
-      /* if this fails, mode will just need picking manually after reload */
-    }
+    // Word delimiter must already be set to "pipe" in Monkeytype's own
+    // settings (a one-time setup step, same as creating the drill-* tags -
+    // see the file header) so drill_practice*.txt's "|" grouping parses as
+    // separate words rather than one giant run-on word.
+    const text = manifest.text.split("|").join(" ");
 
     pendingDrill = {
       category: manifest.key,
@@ -264,7 +308,7 @@
       applied_at: new Date().toISOString(),
     };
     sessionStorage.setItem(PENDING_DRILL_KEY, JSON.stringify(pendingDrill));
-    location.reload();
+    openCustomTextPopupAndFill(text);
   }
 
   function injectDrillPanel() {
