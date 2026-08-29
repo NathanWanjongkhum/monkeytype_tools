@@ -17,7 +17,9 @@ Usage:
     python3 generate_drill_list.py             # regenerate drill_practice.txt
 """
 import json
+import math
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 import db as typing_db
@@ -59,27 +61,69 @@ def words_containing(wordlist, bigram, limit):
     return out
 
 
-def build_drill_entries(bigram_rows, wordlist, target_n=TARGET_BIGRAMS_N):
-    """Pick the slowest qualifying bigrams (bigram_rows is already sorted
-    slowest-first and past MIN_SAMPLES, same as the dashboard's "Slowest
-    bigrams" table), find real Monkeytype-list words containing each, and
-    weight both repeat count and phrase length by how much slower that
-    bigram is than the fastest one in the pool: the worst bigrams get a
-    short phrase repeated often (a tight rote loop to groove the motion),
-    while near-miss bigrams get a longer, more varied phrase repeated only
-    a few times (context coverage instead of rote drilling). Since drills
-    regenerate from fresh typing data, a bigram graduates from the tight
-    loop toward the varied phrase on its own as it gets faster."""
-    targets = [r for r in bigram_rows if len(r["bigram"]) == 2][:target_n]
+def build_bigram_frequency_weights(wordlist):
+    """Approximates each bigram's real-world frequency from Monkeytype's own
+    word list order, since no bigram-frequency corpus exists in this project
+    and the list only carries word rank, not raw counts. Weight is the sum,
+    over every word containing the bigram, of 1/log(rank + 2) - log-rank
+    decay, so a bigram in "the" counts far more than one only in
+    "xylophone", without a single top-50 word being able to dwarf the whole
+    pool the way a literal 1/rank weighting would. See
+    docs/adr/0002-drill-design.md."""
+    weights = {}
+    for rank, word in enumerate(wordlist):
+        contribution = 1 / math.log(rank + 2)
+        for bg in {word[i:i + 2] for i in range(len(word) - 1)}:
+            weights[bg] = weights.get(bg, 0.0) + contribution
+    return weights
+
+
+def build_drill_entries(bigram_rows, wordlist, target_n=TARGET_BIGRAMS_N, frequency_weights=None):
+    """Picks the highest-*impact* qualifying bigrams rather than the
+    slowest: impact = frequency (how often the bigram actually occurs,
+    approximated from Monkeytype's own word list) times excess latency
+    (how much slower than the fastest bigram in this pool, after shrinking
+    each median toward the pool average in proportion to how few samples
+    back it - so a bigram sitting right at MIN_SAMPLES can't claim a
+    precise "worst" ranking off noise alone). See
+    docs/adr/0002-drill-design.md.
+
+    Repeat count and phrase length are then weighted by that same impact
+    score, normalized back onto a ~1.0-centered relative scale: the worst
+    offender gets a short phrase repeated often (a tight rote loop to
+    groove the motion), while a near-miss gets a longer, more varied
+    phrase repeated only a few times (context coverage instead of rote
+    drilling). Since drills regenerate from fresh typing data, a bigram
+    graduates from the tight loop toward the varied phrase on its own as
+    it gets faster."""
+    from dashboard_data import MIN_SAMPLES
+
+    candidates = [r for r in bigram_rows if len(r["bigram"]) == 2]
+    if not candidates:
+        return [], []
+    frequency_weights = frequency_weights or {}
+
+    pool_mean = sum(r["median"] for r in candidates) / len(candidates)
+    for r in candidates:
+        r["shrunk_median"] = (r["n"] * r["median"] + MIN_SAMPLES * pool_mean) / (r["n"] + MIN_SAMPLES)
+    fastest_shrunk = min(r["shrunk_median"] for r in candidates)
+    for r in candidates:
+        freq = frequency_weights.get(r["bigram"], 0.0)
+        r["impact"] = freq * (r["shrunk_median"] - fastest_shrunk)
+
+    targets = sorted(candidates, key=lambda r: -r["impact"])[:target_n]
     if not targets:
         return [], []
 
-    fastest_median = min(r["median"] for r in targets)
+    mean_impact = sum(r["impact"] for r in targets) / len(targets)
     entries, skipped = [], []
     for r in targets:
-        weight = r["median"] / fastest_median
-        repeat = max(MIN_REPEAT, min(MAX_REPEAT, round(MIN_REPEAT * weight)))
-        words_n = max(MIN_WORDS_PER_BIGRAM, min(MAX_WORDS_PER_BIGRAM, round(MAX_WORDS_PER_BIGRAM / weight)))
+        ratio = r["impact"] / mean_impact if mean_impact > 0 else 1.0
+        repeat = max(MIN_REPEAT, min(MAX_REPEAT, round(MIN_REPEAT * ratio)))
+        words_n = (
+            MAX_WORDS_PER_BIGRAM if ratio <= 0
+            else max(MIN_WORDS_PER_BIGRAM, min(MAX_WORDS_PER_BIGRAM, round(MAX_WORDS_PER_BIGRAM / ratio)))
+        )
         words = words_containing(wordlist, r["bigram"], words_n)
         if not words:
             skipped.append(r["bigram"])
@@ -92,6 +136,23 @@ def render_drill_text(entries):
     return "|".join("|".join([e["phrase"]] * e["repeat"]) for e in entries)
 
 
+def write_manifest(drill_path, key, label, entries):
+    """Sidecar JSON next to a drill_practice*.txt, recording which bigrams
+    that specific generation actually targeted. render_drill_text collapses
+    entries down to flat pipe-delimited text with no bigram identity left in
+    it, and /api/dashboard regenerates these files from live DB state on
+    every request - so anything that needs to know "what was in this drill"
+    later (docs/adr/0003-drill-completion-validation.md) has to read this
+    manifest, not re-derive it from whatever the files currently contain."""
+    manifest = {
+        "key": key,
+        "label": label,
+        "bigrams": [e["bigram"] for e in entries],
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    drill_path.with_suffix(".json").write_text(json.dumps(manifest))
+
+
 def generate(bigram_rows, out_path=OUT_PATH):
     """Writes out_path and returns the same drill text, so callers that need
     the text in-memory (the dashboard's copy button) don't have to re-read
@@ -99,13 +160,15 @@ def generate(bigram_rows, out_path=OUT_PATH):
     from dashboard_data import display_bigram
 
     wordlist = load_wordlist()
-    entries, skipped = build_drill_entries(bigram_rows, wordlist)
+    frequency_weights = build_bigram_frequency_weights(wordlist)
+    entries, skipped = build_drill_entries(bigram_rows, wordlist, frequency_weights=frequency_weights)
     if not entries:
         print("[drill] no qualifying bigrams yet, skipping drill list")
         return None
 
     text = render_drill_text(entries)
     out_path.write_text(text)
+    write_manifest(out_path, key="overall", label="Overall", entries=entries)
     print(f"[drill] wrote {out_path} targeting {len(entries)} bigrams: "
           f"{', '.join(display_bigram(e['bigram']) for e in entries)}")
     if skipped:
@@ -114,23 +177,24 @@ def generate(bigram_rows, out_path=OUT_PATH):
     return text
 
 
-def build_category_drills(bigram_rows, wordlist):
-    """Same slowest-first, repeat-weighted approach as build_drill_entries,
-    but split into one drill list per finger-mechanics category
-    (dashboard_data.BIGRAM_CATEGORIES) instead of one list mixing every
-    mechanic together, so you can drill "just same-finger bigrams" on their
-    own. Returns one dict per category, in BIGRAM_CATEGORIES order, whether
-    or not it ended up with any qualifying bigrams."""
+def build_category_drills(bigram_rows, wordlist, frequency_weights=None):
+    """Same impact-weighted approach as build_drill_entries, but split into
+    one drill list per finger-mechanics category (dashboard_data.
+    BIGRAM_CATEGORIES) instead of one list mixing every mechanic together,
+    so you can drill "just same-finger bigrams" on their own. Each
+    category ranks by impact within its own pool, so a frequent-but-awkward
+    bigram outranks a rare one within its category too. Returns one dict
+    per category, in BIGRAM_CATEGORIES order, whether or not it ended up
+    with any qualifying bigrams."""
     from dashboard_data import BIGRAM_CATEGORIES, classify_bigram
 
     tags_by_bigram = {r["bigram"]: classify_bigram(r["bigram"]) for r in bigram_rows}
     drills = []
     for key, label, desc in BIGRAM_CATEGORIES:
-        matches = sorted(
-            (r for r in bigram_rows if key in tags_by_bigram.get(r["bigram"], ())),
-            key=lambda r: -r["median"],
+        matches = [r for r in bigram_rows if key in tags_by_bigram.get(r["bigram"], ())]
+        entries, skipped = build_drill_entries(
+            matches, wordlist, target_n=CATEGORY_TARGET_BIGRAMS_N, frequency_weights=frequency_weights
         )
-        entries, skipped = build_drill_entries(matches, wordlist, target_n=CATEGORY_TARGET_BIGRAMS_N)
         text = render_drill_text(entries) if entries else None
         drills.append({
             "key": key, "label": label, "desc": desc,
@@ -147,13 +211,15 @@ def generate_category_drills(bigram_rows, out_dir=DATA_DIR):
     from dashboard_data import display_bigram
 
     wordlist = load_wordlist()
-    drills = build_category_drills(bigram_rows, wordlist)
+    frequency_weights = build_bigram_frequency_weights(wordlist)
+    drills = build_category_drills(bigram_rows, wordlist, frequency_weights=frequency_weights)
     for d in drills:
         if not d["text"]:
             print(f"[drill] {d['label']}: no qualifying bigrams yet, skipping")
             continue
         path = out_dir / f"drill_practice_{d['key']}.txt"
         path.write_text(d["text"])
+        write_manifest(path, key=d["key"], label=d["label"], entries=d["entries"])
         d["path"] = path.name
         print(f"[drill] wrote {path} targeting {len(d['entries'])} bigrams: "
               f"{', '.join(display_bigram(e['bigram']) for e in d['entries'])}")

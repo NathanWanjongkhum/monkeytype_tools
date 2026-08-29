@@ -7,6 +7,7 @@ DuckDB rebuild when nothing actually changed.
 Usage:
     uvicorn server:app --port 8000 --reload
 """
+import json
 import math
 from pathlib import Path
 
@@ -68,6 +69,7 @@ def _build_payload() -> dict:
 
         bigram_rows, keylog_events, keylog_sessions = dd.load_bigram_rows_db(con)
         freq_by_key, latency_by_key = dd.load_key_stats_db(con)
+        drill_validation = dd.compute_drill_validation(con)
     finally:
         con.close()
 
@@ -127,6 +129,7 @@ def _build_payload() -> dict:
             "detail_rows": ergo_detail_rows,
         },
         "drills": drills,
+        "drill_validation": drill_validation,
         "series": series,
         "key_stats": {"freq": freq_by_key, "latency": latency_by_key},
         "keylog_events": keylog_events,
@@ -153,3 +156,33 @@ def get_drill_file(name: str):
     if not path.exists():
         raise HTTPException(status_code=404)
     return PlainTextResponse(path.read_text())
+
+
+def _read_drill_manifest(txt_name: str):
+    """Reads a drill_practice*.json sidecar (written by
+    generate_drill_list.write_manifest) plus its matching .txt, without
+    touching the DB - see docs/adr/0003-drill-completion-validation.md for
+    why the userscript needs this instead of re-deriving bigrams from
+    whatever the dashboard is currently regenerating."""
+    txt_path = (DATA_DIR / txt_name).resolve()
+    json_path = txt_path.with_suffix(".json")
+    if txt_path.parent != DATA_DIR.resolve() or not json_path.exists():
+        return None
+    manifest = json.loads(json_path.read_text())
+    manifest["text"] = txt_path.read_text() if txt_path.exists() else None
+    return manifest
+
+
+@app.get("/api/drill-manifest")
+def get_drill_manifest():
+    """Lightweight (no DB access) companion to /drills/{name}: tells the
+    keylogger userscript which bigrams and category are behind the most
+    recently generated drill, so it can auto-fill Monkeytype's custom text
+    and apply the matching completion tag."""
+    return {
+        "overall": _read_drill_manifest("drill_practice.txt"),
+        "categories": [
+            m for key, _, _ in dd.BIGRAM_CATEGORIES
+            if (m := _read_drill_manifest(f"drill_practice_{key}.txt")) is not None
+        ],
+    }

@@ -123,6 +123,7 @@ def load_keylog(con: duckdb.DuckDBPyConnection) -> None:
             saved_at = None
             url = None
             config = None
+            drill = None
         else:
             session_id = payload["session_id"]
             part = payload["part"]
@@ -130,6 +131,7 @@ def load_keylog(con: duckdb.DuckDBPyConnection) -> None:
             saved_at = payload.get("saved_at")
             url = payload.get("url")
             config = payload.get("config")
+            drill = payload.get("drill")
 
         session_rows.append({
             "session_id": session_id,
@@ -137,6 +139,7 @@ def load_keylog(con: duckdb.DuckDBPyConnection) -> None:
             "url": url,
             "saved_at": pd.to_datetime(saved_at) if saved_at else None,
             "config": json.dumps(config) if config is not None else None,
+            "drill": json.dumps(drill) if drill is not None else None,
             "source_file": str(f.relative_to(ROOT)),
         })
 

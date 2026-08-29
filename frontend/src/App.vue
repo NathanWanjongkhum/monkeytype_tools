@@ -4,6 +4,7 @@ import ActionPlan from './components/ActionPlan.vue'
 import BigramTable from './components/BigramTable.vue'
 import CategoryDrillCards from './components/CategoryDrillCards.vue'
 import CopyButton from './components/CopyButton.vue'
+import DrillValidationTable from './components/DrillValidationTable.vue'
 import ErgonomicsDetailTable from './components/ErgonomicsDetailTable.vue'
 import ErgonomicsSummaryTable from './components/ErgonomicsSummaryTable.vue'
 import KeyboardHeatmap from './components/KeyboardHeatmap.vue'
@@ -149,6 +150,17 @@ function correlationReading(r: number): string {
           your practice coverage, not a bug.
         </p>
         <PopularTestsTable :rows="data.popular_tests" />
+      </section>
+
+      <section>
+        <h2>Drill validation</h2>
+        <p class="caption">
+          Whether drilling actually worked: for every Monkeytype test tagged as a completed drill (see
+          docs/adr/0003-drill-completion-validation.md), compares each targeted bigram's median keystroke latency
+          before that completion to after it. This is a passive check, not fed back into how drills are generated -
+          it's here so you can judge whether the frequency-weighted approach above is actually paying off.
+        </p>
+        <DrillValidationTable :rows="data.drill_validation" />
       </section>
 
       <section>

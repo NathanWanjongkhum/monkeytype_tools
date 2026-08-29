@@ -97,6 +97,18 @@ export interface CategoryDrillInfo extends DrillInfo {
   n_entries: number
 }
 
+/** One bigram's before/after latency comparison across every tagged drill
+ * completion that targeted it (docs/adr/0003-drill-completion-validation.md).
+ * `occurrences` counts how many separate tagged completions contributed. */
+export interface DrillValidationRow {
+  bigram: string
+  category: string
+  occurrences: number
+  avg_before_median: number
+  avg_after_median: number
+  avg_delta_ms: number
+}
+
 export interface SeriesPoint {
   timestamp: string
   wpm: number
@@ -129,6 +141,7 @@ export interface DashboardPayload {
     overall: DrillInfo
     categories: CategoryDrillInfo[]
   }
+  drill_validation: DrillValidationRow[]
   series: SeriesPoint[]
   key_stats: {
     freq: Record<string, number>

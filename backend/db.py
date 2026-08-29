@@ -51,6 +51,10 @@ CREATE TABLE session_parts (
     url         VARCHAR,
     saved_at    TIMESTAMP,
     config      JSON,
+    -- {category, bigrams, generated_at, applied_at} when this part's events
+    -- were typed under a drill loaded via the keylogger userscript's drill
+    -- panel; NULL otherwise. See docs/adr/0003-drill-completion-validation.md.
+    drill       JSON,
     source_file VARCHAR,
     PRIMARY KEY (session_id, part)
 );

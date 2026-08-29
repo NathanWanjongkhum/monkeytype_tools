@@ -4,6 +4,7 @@ JSON and frontend/ renders it. Split out of what used to be
 generate_dashboard.py so the compute layer has no presentation code mixed
 into it.
 """
+import json
 import math
 
 import numpy as np
@@ -190,6 +191,120 @@ def load_bigram_rows_db(con):
         "SELECT count(DISTINCT session_id) FROM session_parts"
     ).fetchone()[0]
     return rows, n_events, n_sessions
+
+
+def load_bigram_pairs_db(con):
+    """Same attempt-scoped LAG pairing as load_bigram_rows_db, but one row
+    per keystroke pair (bigram, ts_ms, gap) instead of aggregated medians -
+    compute_drill_validation needs to slice by time window relative to a
+    specific tagged completion, not the whole history at once."""
+    return con.execute(f"""
+        WITH matched_events AS (
+            SELECT ke.attempt_id, ke.ts_ms, ke.key
+            FROM keylog_events ke
+            JOIN attempts a ON a.attempt_id = ke.attempt_id
+            WHERE a.result_id IS NOT NULL
+        ),
+        ordered AS (
+            SELECT attempt_id, ts_ms, key,
+                   LAG(key) OVER (PARTITION BY attempt_id ORDER BY ts_ms) AS prev_key,
+                   LAG(ts_ms) OVER (PARTITION BY attempt_id ORDER BY ts_ms) AS prev_ts
+            FROM matched_events
+        )
+        SELECT prev_key || key AS bigram, ts_ms, ts_ms - prev_ts AS gap
+        FROM ordered
+        WHERE length(key) = 1 AND length(prev_key) = 1
+          AND ts_ms - prev_ts > 0 AND ts_ms - prev_ts <= {MAX_GAP_MS}
+    """).fetchdf()
+
+
+def load_tagged_drill_completions_db(con):
+    """Genuine drill completions: a matched Attempt whose Result carries the
+    `drill-<category>` tag that the keylogger userscript applies after a
+    completed custom-mode drill test, joined back to the session_parts.drill
+    manifest recorded when that drill was loaded (docs/adr/
+    0003-drill-completion-validation.md - the tag alone only proves *a*
+    drill of that category happened, not which bigrams; the manifest is
+    the only record of that, since the drill files themselves regenerate
+    from live data on every dashboard load). Only completions where the tag
+    actually matches the manifest's own category are trusted - a stale tag
+    from a since-changed drill, or a hand-applied tag with no matching
+    session, is dropped rather than guessed at."""
+    rows = con.execute("""
+        SELECT a.attempt_id, a.end_ms, r.tags, any_value(sp.drill) AS drill
+        FROM attempts a
+        JOIN results r ON r.result_id = a.result_id
+        JOIN keylog_events ke ON ke.attempt_id = a.attempt_id
+        JOIN session_parts sp ON sp.session_id = ke.session_id AND sp.part = ke.part
+        WHERE a.result_id IS NOT NULL AND sp.drill IS NOT NULL AND r.tags IS NOT NULL
+        GROUP BY a.attempt_id, a.end_ms, r.tags
+    """).fetchdf().to_dict("records")
+
+    completions = []
+    for r in rows:
+        manifest = json.loads(r["drill"]) if isinstance(r["drill"], str) else r["drill"]
+        if not manifest or not manifest.get("category") or not manifest.get("bigrams"):
+            continue
+        tags = list(r["tags"]) if r["tags"] is not None else []
+        expected_tag = f"drill-{manifest['category']}"
+        if expected_tag not in tags:
+            continue
+        completions.append({
+            "attempt_id": r["attempt_id"],
+            "end_ms": r["end_ms"],
+            "category": manifest["category"],
+            "bigrams": manifest["bigrams"],
+        })
+    return completions
+
+
+def compute_drill_validation(con):
+    """For every genuine (tagged) drill completion, compares each targeted
+    bigram's keystroke latency from before that completion to after it -
+    the passive validation signal from docs/adr/0003-drill-completion-
+    validation.md. The category tag only locates completions; the bigram
+    (not category) is the unit of comparison, since there's no fixed "the
+    SFB bigrams" once drills regenerate from live data on every request. A
+    bigram recurring across multiple tagged completions produces one
+    before/after instance per occurrence, rolled up here by averaging.
+    Requires MIN_SAMPLES on both sides of a given occurrence to count it,
+    same noise floor as everywhere else bigram latency gets computed."""
+    completions = load_tagged_drill_completions_db(con)
+    if not completions:
+        return []
+    pairs = load_bigram_pairs_db(con)
+    if pairs.empty:
+        return []
+
+    occurrences_by_bigram = {}
+    for c in completions:
+        t = c["end_ms"]
+        for bigram in c["bigrams"]:
+            sub = pairs[pairs["bigram"] == bigram]
+            before = sub.loc[sub["ts_ms"] < t, "gap"]
+            after = sub.loc[sub["ts_ms"] > t, "gap"]
+            if len(before) < MIN_SAMPLES or len(after) < MIN_SAMPLES:
+                continue
+            before_median, after_median = before.median(), after.median()
+            occurrences_by_bigram.setdefault(bigram, []).append({
+                "category": c["category"],
+                "before_median": before_median,
+                "after_median": after_median,
+                "delta_ms": before_median - after_median,
+            })
+
+    report = []
+    for bigram, occurrences in occurrences_by_bigram.items():
+        report.append({
+            "bigram": bigram,
+            "category": occurrences[-1]["category"],  # most recent completion's category
+            "occurrences": len(occurrences),
+            "avg_before_median": sum(o["before_median"] for o in occurrences) / len(occurrences),
+            "avg_after_median": sum(o["after_median"] for o in occurrences) / len(occurrences),
+            "avg_delta_ms": sum(o["delta_ms"] for o in occurrences) / len(occurrences),
+        })
+    report.sort(key=lambda r: -r["avg_delta_ms"])
+    return report
 
 
 def load_key_stats_db(con):
