@@ -7,47 +7,6 @@
 // @grant        GM_download
 // ==/UserScript==
 
-// Sessions land in <Downloads>/monkeytype-keylogs/<date>/<session>-part<N>.json:
-// one file per periodic save (every 3 min by default) plus a best-effort
-// final save when the tab closes. Only runs on monkeytype.com, per @match
-// above. Periodically move/clean up that folder into
-// ~/dev/monkeytype_tools/data/keylogs/ (analyze_keylog.py scans there by
-// default), e.g.:
-//   mv ~/Downloads/monkeytype-keylogs/* ~/dev/monkeytype_tools/data/keylogs/
-// Ctrl+Shift+E forces an immediate save too.
-//
-// Each saved file also carries a `config` snapshot (Monkeytype's own
-// localStorage settings: mode, word/time target, punctuation, numbers,
-// difficulty, layout, funbox, ...) as of that save, so keystroke data can
-// later be segmented by what test/settings it was actually typed under.
-//
-// A small button panel (bottom-right) fetches the most recently generated
-// drill from the local dashboard backend (127.0.0.1:8000) per
-// docs/adr/0003-drill-completion-validation.md, and drives Monkeytype's own
-// "custom" mode > "change" text popup to load it - customText/
-// customTextSettings in localStorage turned out to be Monkeytype's *saved
-// presets* library, not the live/active test state, so this fills and
-// submits the popup's real form instead. If a drill is pending when a
-// custom test completes, the saved envelope's `drill` field records exactly
-// which bigrams were targeted (the drill files themselves regenerate from
-// live data on every dashboard load, so that can't be re-derived later from
-// whatever's currently on disk), and the script attempts to tag the result
-// with `drill-<category>` so later analysis can tell a genuine drill
-// completion apart from any other typing.
-//
-// One-time setup before the drill panel works:
-//   1. Monkeytype settings > word delimiter > pipe (drill_practice*.txt
-//      groups words with "|"; this is what makes that mean "separate word"
-//      instead of one long run-on word).
-//   2. Create the tags drill-overall, drill-sfb, drill-row_skip, drill-roll,
-//      drill-lsb once (Account > tags) - tags are referenced by ID, not
-//      name, so they must exist before the script can find them. Without
-//      any tags at all, Monkeytype hides the results screen's whole tags
-//      section, so this step also has to happen before tagging can work at
-//      all, not just before the right tag can be found. drill-roll (not
-//      drill-awkward_roll) because Monkeytype's tag-name length limit
-//      rejects the full category name - see DRILL_TAG_OVERRIDES below.
-
 (function () {
   "use strict";
 
@@ -61,12 +20,6 @@
   let partIndex = 0;
 
   function lastResolvedLetterClasses() {
-    // Best-effort correctness signal, verified live against monkeytype.com:
-    // there is no per-letter "active" class (that's on the .word div only).
-    // Typed letters get class "correct" or "incorrect" on the <letter>
-    // element, so the most recently resolved one in the active word is
-    // what we just typed. If this stops matching (site markup changed),
-    // classes will just come back empty. Check with devtools on #words.
     const activeWord = document.querySelector("#words .word.active");
     if (!activeWord) return [];
     const resolved = activeWord.querySelectorAll("letter.correct, letter.incorrect");
@@ -77,37 +30,18 @@
   document.addEventListener(
     "keydown",
     (e) => {
-      if (e.ctrlKey && e.shiftKey && e.key === "E") return; // the export hotkey itself, not typing content
-      // OS key-repeat firing while a key is held down. Monkeytype's own input
-      // handling ignores these (e.g. holding space past the end of a word does
-      // nothing once the next word is empty), so logging them fabricates
-      // keystrokes/bigrams that never became part of any result. Confirmed
-      // against typing.duckdb: every double-space bigram in the data had zero
-      // resolved letters on the second keydown; it never advanced the test.
+      // export hotkey
+      if (e.ctrlKey && e.shiftKey && e.key === "E") return; 
+      // Ignores OS key-repeat firing while a key is held down
       if (e.repeat) return;
       if (e.key.length > 1 && e.key !== "Backspace" && e.key !== " ") return;
-      // Only log keys typed into the actual test input while a test is
-      // actively being typed - not keys typed elsewhere on the page
-      // (leaderboard search, settings, account/profile fields, ...) and not
-      // idle focus on #wordsInput with no test running (start screen,
-      // between quick-restarts, results screen). Fails closed on both
-      // checks: if #wordsInput or the active word can't be found (site
-      // markup changed, or we're simply on a different monkeytype.com route
-      // that doesn't have a test screen at all - @match is the whole site),
-      // drop the event instead of logging it. A gap in the data is visible
-      // and harmless; a phantom bigram from leaked keystrokes silently
-      // corrupts stats. Confirmed against typing.duckdb: before this check
-      // existed, ~25% of "attempts" never matched any real test result, and
-      // averaged ~34 events vs. ~414 for real ones - stray typing bleeding
-      // into bigram/key stats as if it were test content.
+
       const wordsInput = document.getElementById("wordsInput");
       if (document.activeElement !== wordsInput) return;
       if (!document.querySelector("#words .word.active")) return;
       const ts = Date.now();
       const key = e.key;
-      // deferred to macrotask: our listener is capture-phase on document,
-      // which fires before Monkeytype's own handler (bound on #wordsInput)
-      // resolves the correct/incorrect class for this keystroke
+
       setTimeout(() => pending.push({ ts, key, classes: lastResolvedLetterClasses() }), 0);
     },
     true
@@ -118,13 +52,6 @@
   }
 
   function currentConfig() {
-    // Monkeytype persists the full active test config to localStorage as
-    // plain JSON (mode, word/time target, punctuation, numbers, difficulty,
-    // stopOnError, freedomMode, blindMode, funbox, layout, ...). Read fresh
-    // at save time so each part reflects whatever was active as of that
-    // save, not whatever was active on page load. If the user changes
-    // settings mid-buffer without triggering a save, events in that part
-    // may span the change unnoticed; it's not tracked at finer granularity.
     try {
       const raw = localStorage.getItem("config");
       return raw ? JSON.parse(raw) : null;
@@ -148,9 +75,6 @@
       url: location.href,
       saved_at: now.toISOString(),
       config: currentConfig(),
-      // Which drill (if any) was loaded for this session, per
-      // docs/adr/0003-drill-completion-validation.md - null once no drill is
-      // pending (never applied, or already resolved after a completion).
       drill: pendingDrill,
       events: toSave,
     };
@@ -175,11 +99,7 @@
 
   setInterval(saveSession, FLUSH_INTERVAL_MS);
 
-  // Best-effort final save on tab close. Not guaranteed to finish since the
-  // page is tearing down, but GM_download hands off to the browser's own
-  // download manager rather than a page-level network request, so it
-  // survives teardown more often than fetch/XHR would. pagehide fires more
-  // reliably than beforeunload for this.
+  // Best-effort final save on tab close. 
   window.addEventListener("pagehide", saveSession);
 
   document.addEventListener("keydown", (e) => {
@@ -190,21 +110,9 @@
     }
   });
 
-  // --- Drill automation (docs/adr/0003-drill-completion-validation.md) ---
-  //
-  // NOTE: fillCustomTextForm()'s and the tag popup's (findTagPopup/
-  // findTagToggle) markup were both confirmed live, by hand. The one
-  // remaining unconfirmed piece is the "custom"/"change" button text-match
-  // in openCustomTextPopupAndFill() - treat that as best-effort and adjust
-  // if it stops matching, the same way lastResolvedLetterClasses() above is
-  // already flagged.
-
   const BACKEND_BASE = "http://127.0.0.1:8000";
   const PENDING_DRILL_KEY = "mt-logger-pending-drill";
 
-  // Exceptions to the `drill-<category>` naming convention, for categories
-  // whose name is too long for Monkeytype's tag-name length limit. Keep in
-  // sync with dashboard_data.py's DRILL_TAG_OVERRIDES.
   const DRILL_TAG_OVERRIDES = { awkward_roll: "drill-roll" };
 
   function tagNameForCategory(key) {
@@ -228,8 +136,6 @@
   }
 
   async function fetchDrillManifest(categoryKey) {
-    // Plain fetch, not GM_xmlhttpRequest: server.py already sends wildcard
-    // CORS on GET routes, so no cross-origin grant is needed for reads.
     const res = await fetch(`${BACKEND_BASE}/api/drill-manifest`);
     if (!res.ok) throw new Error(`drill-manifest fetch failed: ${res.status}`);
     const data = await res.json();
@@ -247,12 +153,6 @@
   }
 
   function fillCustomTextForm(text) {
-    // Confirmed live against monkeytype.com (unlike the rest of this
-    // section): the popup's own textarea is `textarea#text`, its submit is
-    // `button[type=submit]` reading "ok" in the same <form>. Sets .value via
-    // the native setter + dispatches "input" so the popup's own form-state
-    // library (bound via onInput, not a raw DOM value read) picks it up -
-    // just setting .value directly is invisible to that kind of binding.
     const textarea = document.querySelector("textarea#text");
     if (!textarea) return false;
     const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
@@ -267,12 +167,6 @@
   }
 
   function openCustomTextPopupAndFill(text, attempt = 0) {
-    // Two-step flow confirmed by hand: select "custom" mode, then a
-    // "change" button appears (or the popup opens directly, first time) to
-    // reopen the text popup. Unlike fillCustomTextForm() above, neither
-    // trigger's selector was confirmed live - falls back to matching
-    // visible button text, same as findTagToggle() below. If Monkeytype's
-    // wording differs from "custom"/"change"/"ok", update the strings here.
     if (fillCustomTextForm(text)) return;
 
     const customModeBtn = findButtonByText("custom");
@@ -289,7 +183,7 @@
           }
         }, 200);
       } else if (attempt < 1) {
-        setTimeout(() => openCustomTextPopupAndFill(text, attempt + 1), 300); // mode switch may need a beat to render "change"
+        setTimeout(() => openCustomTextPopupAndFill(text, attempt + 1), 300);
       } else {
         console.warn('[mt-logger] could not find "custom" mode or "change" button - open custom mode manually once, then retry');
       }
@@ -352,8 +246,6 @@
   }
 
   function findTagPopup() {
-    // Confirmed live: "Edit result tags" popup is a `.modal` containing one
-    // <button type="button"> per tag (label text) plus a "save" button.
     for (const modal of document.querySelectorAll(".modal")) {
       if (modal.textContent.includes("Edit result tags")) return modal;
     }
@@ -361,9 +253,6 @@
   }
 
   function findTagToggle(popup, tagName) {
-    // Confirmed live: tag buttons render underscores in the name as spaces
-    // (e.g. "drill-row_skip" -> "drill-row skip"), so normalize both sides
-    // before comparing rather than matching the stored name literally.
     const normalize = (s) => s.trim().toLowerCase().replace(/_/g, " ");
     const target = normalize(tagName);
     for (const btn of popup.querySelectorAll("button")) {
@@ -376,7 +265,6 @@
     if (!pendingDrill) return;
     const tagName = tagNameForCategory(pendingDrill.category);
     editTagsButton.click();
-    // Popup rendering is async; give it a beat before searching for the tag.
     setTimeout(() => {
       const popup = findTagPopup();
       if (!popup) {
@@ -394,10 +282,6 @@
         return;
       }
       toggle.click();
-      // Clicking a tag button only toggles local selection state - nothing
-      // persists until "save" is clicked (confirmed live: this was the
-      // actual reason an earlier version's "applied tag" log didn't show up
-      // on Monkeytype at all).
       const saveBtn = findButtonByText("save", popup);
       if (saveBtn) {
         saveBtn.click();
