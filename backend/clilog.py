@@ -5,6 +5,7 @@ supervise (server.py via uvicorn, the Vite dev server) get their tag applied
 line-by-line by the supervisor itself instead, since we don't control their
 raw output - see generate_dashboard.py's _stream().
 """
+
 import os
 import sys
 

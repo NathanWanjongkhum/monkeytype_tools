@@ -1,0 +1,39 @@
+[project]
+name = "monkeytype-tools-backend"
+version = "0.1.0"
+requires-python = ">=3.12"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["."]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "D",       # pydocstyle - no docstring convention enforced in this repo
+    "CPY",     # flake8-copyright - no copyright headers wanted on this personal tool
+    "COM812",  # trailing-comma - conflicts with ruff format
+    "ISC001",  # single-line-implicit-string-concat - conflicts with ruff format
+    "TD",      # flake8-todos - TODOs aren't tracked via strict tags here
+    "FIX",     # flake8-fixme - same as above
+    "PLR0913", # too-many-arguments - many funcs shuttle db handles/config through
+    "PLR0917", # too-many-positional-arguments
+]
+
+[tool.ruff.lint.per-file-ignores]
+"build_db.py" = ["T201"]           # CLI script: print() is the UI
+"generate_dashboard.py" = ["T201"]
+"generate_drill_list.py" = ["T201"]
+"refresh.py" = ["T201"]
+"clilog.py" = ["T201"]
+"fetch_monkeytype_results.py" = ["T201"]
+"import_keylogs.py" = ["T201"]
+"analyze_keylog.py" = ["T201"]
+
+[tool.ty.rules]
+# Strictest mode: promote every rule ty knows about to error.
+all = "error"
+
+[tool.ty.src]
+respect-ignore-files = true

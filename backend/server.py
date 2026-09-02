@@ -7,9 +7,11 @@ DuckDB rebuild when nothing actually changed.
 Usage:
     uvicorn server:app --port 8000 --reload
 """
+
 import json
 import math
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -17,10 +19,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 
+import clilog
 import dashboard_data as dd
 import db as typing_db
 import generate_drill_list
 import refresh
+from models import DashboardPayload, DrillManifest, DrillManifestResponse
 
 HERE = Path(__file__).parent
 DATA_DIR = HERE.parent / "data"
@@ -34,7 +38,7 @@ app.add_middleware(
 )
 
 
-def _sanitize(obj):
+def _sanitize(obj: Any) -> Any:  # noqa: ANN401, PLR0911 -- genuinely polymorphic JSON coercion
     """Make DuckDB/pandas/numpy output JSON-safe: NaN/NaT -> None, numpy
     scalars -> native Python, Timestamps -> ISO strings, sets -> lists."""
     if isinstance(obj, dict):
@@ -56,7 +60,7 @@ def _sanitize(obj):
     return obj
 
 
-def _build_payload() -> dict:
+def _build_payload() -> DashboardPayload:
     con = typing_db.connect()
     try:
         df = dd.load_results_db(con)
@@ -77,7 +81,7 @@ def _build_payload() -> dict:
 
     kpis = dd.compute_kpis(df)
     insights = dd.compute_insights(df, bigram_rows)
-    actions = dd.compute_action_plan(kpis, insights, has_tags)
+    actions = dd.compute_action_plan(kpis, insights, has_tags=has_tags)
     popular_tests_rows = dd.compute_popular_tests(df)
     (
         ergo_overall_avg,
@@ -92,8 +96,19 @@ def _build_payload() -> dict:
 
     series = (
         df[
-            ["timestamp", "wpm", "acc", "mode", "mode2", "is_pb", "language", "punctuation",
-             "numbers", "raw_wpm", "testDuration"]
+            [
+                "timestamp",
+                "wpm",
+                "acc",
+                "mode",
+                "mode2",
+                "is_pb",
+                "language",
+                "punctuation",
+                "numbers",
+                "raw_wpm",
+                "testDuration",
+            ]
         ]
         .rename(columns={"testDuration": "test_duration"})
         .to_dict("records")
@@ -135,21 +150,21 @@ def _build_payload() -> dict:
         "keylog_events": keylog_events,
         "keylog_sessions": keylog_sessions,
     }
-    return _sanitize(payload)
+    return DashboardPayload.model_validate(_sanitize(payload))
 
 
 @app.get("/api/dashboard")
-def get_dashboard():
+def get_dashboard() -> DashboardPayload:
     refresh.refresh_results()
     refresh.refresh_keylogs()
     rebuilt = refresh.rebuild_if_changed()
     if rebuilt:
-        print("db rebuilt")
+        clilog.info("server", "db rebuilt")
     return _build_payload()
 
 
 @app.get("/drills/{name}")
-def get_drill_file(name: str):
+def get_drill_file(name: str) -> PlainTextResponse:
     path = (DATA_DIR / name).resolve()
     if path.parent != DATA_DIR.resolve() or not path.name.startswith("drill_practice"):
         raise HTTPException(status_code=404)
@@ -158,7 +173,7 @@ def get_drill_file(name: str):
     return PlainTextResponse(path.read_text())
 
 
-def _read_drill_manifest(txt_name: str):
+def _read_drill_manifest(txt_name: str) -> DrillManifest | None:
     """Reads a drill_practice*.json sidecar (written by
     generate_drill_list.write_manifest) plus its matching .txt, without
     touching the DB - see docs/adr/0003-drill-completion-validation.md for
@@ -170,19 +185,20 @@ def _read_drill_manifest(txt_name: str):
         return None
     manifest = json.loads(json_path.read_text())
     manifest["text"] = txt_path.read_text() if txt_path.exists() else None
-    return manifest
+    return DrillManifest.model_validate(manifest)
 
 
 @app.get("/api/drill-manifest")
-def get_drill_manifest():
+def get_drill_manifest() -> DrillManifestResponse:
     """Lightweight (no DB access) companion to /drills/{name}: tells the
     keylogger userscript which bigrams and category are behind the most
     recently generated drill, so it can auto-fill Monkeytype's custom text
     and apply the matching completion tag."""
-    return {
-        "overall": _read_drill_manifest("drill_practice.txt"),
-        "categories": [
-            m for key, _, _ in dd.BIGRAM_CATEGORIES
+    return DrillManifestResponse(
+        overall=_read_drill_manifest("drill_practice.txt"),
+        categories=[
+            m
+            for key, _, _ in dd.BIGRAM_CATEGORIES
             if (m := _read_drill_manifest(f"drill_practice_{key}.txt")) is not None
         ],
-    }
+    )

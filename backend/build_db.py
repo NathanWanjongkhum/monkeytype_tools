@@ -7,8 +7,11 @@ the DB is always dropped and reloaded from scratch.
 Usage:
     python3 build_db.py
 """
+
 import json
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any, cast
 
 import duckdb
 import pandas as pd
@@ -42,6 +45,7 @@ MATCH_TOLERANCE_MS = 3_000
 # results
 # ---------------------------------------------------------------------------
 
+
 def load_results(con: duckdb.DuckDBPyConnection) -> None:
     if not RESULTS_JSON.exists():
         clilog.info("build_db", f"no {RESULTS_JSON.name}, skipping results load")
@@ -64,35 +68,37 @@ def load_results(con: duckdb.DuckDBPyConnection) -> None:
         if timestamp_ms is not None and test_duration is not None:
             est_start_ms = int(timestamp_ms - (test_duration + afk_duration) * 1000)
 
-        rows.append({
-            "result_id": r["_id"],
-            "uid": r.get("uid"),
-            "wpm": r.get("wpm"),
-            "raw_wpm": r.get("rawWpm"),
-            "acc": r.get("acc"),
-            "consistency": r.get("consistency"),
-            "key_consistency": r.get("keyConsistency"),
-            "mode": r.get("mode"),
-            "mode2": r.get("mode2"),
-            "language": r.get("language"),
-            "difficulty": r.get("difficulty"),
-            "quote_length": r.get("quoteLength"),
-            "restart_count": r.get("restartCount"),
-            "is_pb": is_pb,
-            "punctuation": bool(r.get("punctuation")),
-            "numbers": bool(r.get("numbers")),
-            "incomplete_test_seconds": r.get("incompleteTestSeconds"),
-            "test_duration": test_duration,
-            "afk_duration": afk_duration,
-            "chars_correct": char_stats[0],
-            "chars_incorrect": char_stats[1],
-            "chars_extra": char_stats[2],
-            "chars_missed": char_stats[3],
-            "tags": r.get("tags"),
-            "timestamp_ms": timestamp_ms,
-            "ts": pd.to_datetime(timestamp_ms, unit="ms") if timestamp_ms else None,
-            "est_start_ms": est_start_ms,
-        })
+        rows.append(
+            {
+                "result_id": r["_id"],
+                "uid": r.get("uid"),
+                "wpm": r.get("wpm"),
+                "raw_wpm": r.get("rawWpm"),
+                "acc": r.get("acc"),
+                "consistency": r.get("consistency"),
+                "key_consistency": r.get("keyConsistency"),
+                "mode": r.get("mode"),
+                "mode2": r.get("mode2"),
+                "language": r.get("language"),
+                "difficulty": r.get("difficulty"),
+                "quote_length": r.get("quoteLength"),
+                "restart_count": r.get("restartCount"),
+                "is_pb": is_pb,
+                "punctuation": bool(r.get("punctuation")),
+                "numbers": bool(r.get("numbers")),
+                "incomplete_test_seconds": r.get("incompleteTestSeconds"),
+                "test_duration": test_duration,
+                "afk_duration": afk_duration,
+                "chars_correct": char_stats[0],
+                "chars_incorrect": char_stats[1],
+                "chars_extra": char_stats[2],
+                "chars_missed": char_stats[3],
+                "tags": r.get("tags"),
+                "timestamp_ms": timestamp_ms,
+                "ts": pd.to_datetime(timestamp_ms, unit="ms") if timestamp_ms else None,
+                "est_start_ms": est_start_ms,
+            }
+        )
 
     df = pd.DataFrame(rows)
     con.register("results_df", df)
@@ -104,6 +110,7 @@ def load_results(con: duckdb.DuckDBPyConnection) -> None:
 # ---------------------------------------------------------------------------
 # keylog sessions + events
 # ---------------------------------------------------------------------------
+
 
 def load_keylog(con: duckdb.DuckDBPyConnection) -> None:
     if not KEYLOG_DIR.exists():
@@ -133,25 +140,29 @@ def load_keylog(con: duckdb.DuckDBPyConnection) -> None:
             config = payload.get("config")
             drill = payload.get("drill")
 
-        session_rows.append({
-            "session_id": session_id,
-            "part": part,
-            "url": url,
-            "saved_at": pd.to_datetime(saved_at) if saved_at else None,
-            "config": json.dumps(config) if config is not None else None,
-            "drill": json.dumps(drill) if drill is not None else None,
-            "source_file": str(f.relative_to(ROOT)),
-        })
-
-        for seq, e in enumerate(events):
-            event_rows.append({
+        session_rows.append(
+            {
                 "session_id": session_id,
                 "part": part,
-                "seq": seq,
-                "ts_ms": e["ts"],
-                "key": e["key"],
-                "classes": e.get("classes", []),
-            })
+                "url": url,
+                "saved_at": pd.to_datetime(saved_at) if saved_at else None,
+                "config": json.dumps(config) if config is not None else None,
+                "drill": json.dumps(drill) if drill is not None else None,
+                "source_file": str(f.relative_to(ROOT)),
+            }
+        )
+
+        for seq, e in enumerate(events):
+            event_rows.append(
+                {
+                    "session_id": session_id,
+                    "part": part,
+                    "seq": seq,
+                    "ts_ms": e["ts"],
+                    "key": e["key"],
+                    "classes": e.get("classes", []),
+                }
+            )
 
     if session_rows:
         sdf = pd.DataFrame(session_rows)
@@ -165,7 +176,9 @@ def load_keylog(con: duckdb.DuckDBPyConnection) -> None:
         con.register("event_df", edf)
         con.execute("INSERT INTO keylog_events SELECT * FROM event_df")
         con.unregister("event_df")
-    clilog.info("build_db", f"loaded {len(session_rows)} session files, {len(event_rows)} keylog events")
+    clilog.info(
+        "build_db", f"loaded {len(session_rows)} session files, {len(event_rows)} keylog events"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -184,8 +197,10 @@ def load_keylog(con: duckdb.DuckDBPyConnection) -> None:
 # i.e. custom/practice typing that never posted a result) become their own
 # unmatched attempt rather than being dropped.
 
-def _coarse_blocks(events: pd.DataFrame):
-    block, prev_ts = [], None
+
+def _coarse_blocks(events: pd.DataFrame) -> Iterator[list[pd.Series]]:
+    block: list[pd.Series] = []
+    prev_ts = None
     for _, ev in events.iterrows():
         if prev_ts is not None and (ev["ts_ms"] - prev_ts) > SEGMENT_GAP_MS:
             yield block
@@ -196,32 +211,49 @@ def _coarse_blocks(events: pd.DataFrame):
         yield block
 
 
-def _assign_result(ts_ms: int, candidates: list[dict], pointer: list[int]) -> dict | None:
-    while pointer[0] < len(candidates) - 1 and ts_ms > candidates[pointer[0]]["timestamp_ms"] + MATCH_TOLERANCE_MS:
+def _assign_result(
+    ts_ms: int, candidates: list[dict[str, Any]], pointer: list[int]
+) -> dict[str, Any] | None:
+    while (
+        pointer[0] < len(candidates) - 1
+        and ts_ms > candidates[pointer[0]]["timestamp_ms"] + MATCH_TOLERANCE_MS
+    ):
         pointer[0] += 1
     c = candidates[pointer[0]] if candidates else None
-    if c and c["est_start_ms"] - MATCH_TOLERANCE_MS <= ts_ms <= c["timestamp_ms"] + MATCH_TOLERANCE_MS:
+    if (
+        c
+        and c["est_start_ms"] - MATCH_TOLERANCE_MS
+        <= ts_ms
+        <= c["timestamp_ms"] + MATCH_TOLERANCE_MS
+    ):
         return c
     return None
 
 
-def _runs(block: list, candidates: list[dict]):
+_UNSET: Any = object()
+
+
+def _runs(
+    block: list[pd.Series], candidates: list[dict[str, Any]]
+) -> Iterator[tuple[dict[str, Any] | None, list[pd.Series]]]:
     """Split a coarse block's events into consecutive runs that share the
     same assigned result (or share "no result"). Yields (result_or_None, events)."""
     pointer = [0]
-    run_result, run_events = "__unset__", []
+    run_result: dict[str, Any] | None = _UNSET
+    run_events: list[pd.Series] = []
     for ev in block:
         assigned = _assign_result(ev["ts_ms"], candidates, pointer)
-        if run_result != "__unset__" and _key(assigned) != _key(run_result):
+        if run_result is not _UNSET and _key(assigned) != _key(run_result):
             yield run_result, run_events
             run_events = []
-        run_result, run_events = assigned, run_events + [ev]
+        run_events = [*run_events, ev]
+        run_result = assigned
     if run_events:
         yield run_result, run_events
 
 
-def _key(result: dict | None):
-    return result["result_id"] if result else None
+def _key(result: dict[str, Any] | None) -> str | None:
+    return cast("str", result["result_id"]) if result else None
 
 
 def segment_and_match(con: duckdb.DuckDBPyConnection) -> None:
@@ -229,11 +261,15 @@ def segment_and_match(con: duckdb.DuckDBPyConnection) -> None:
         "SELECT session_id, part, seq, ts_ms FROM keylog_events "
         "ORDER BY session_id, ts_ms, part, seq"
     ).fetchdf()
-    results = con.execute(
-        "SELECT result_id, est_start_ms, timestamp_ms, "
-        "chars_correct + chars_incorrect + chars_extra + chars_missed AS expected_chars "
-        "FROM results WHERE est_start_ms IS NOT NULL ORDER BY est_start_ms"
-    ).fetchdf().to_dict("records")
+    results = (
+        con.execute(
+            "SELECT result_id, est_start_ms, timestamp_ms, "
+            "chars_correct + chars_incorrect + chars_extra + chars_missed AS expected_chars "
+            "FROM results WHERE est_start_ms IS NOT NULL ORDER BY est_start_ms"
+        )
+        .fetchdf()
+        .to_dict("records")
+    )
 
     attempt_rows = []
     event_assignments = []
@@ -241,19 +277,16 @@ def segment_and_match(con: duckdb.DuckDBPyConnection) -> None:
     attempt_count = 0
 
     for session_id, session_events in events.groupby("session_id", sort=False):
-        block_idx = 0
-        for block in _coarse_blocks(session_events):
-            block_idx += 1
+        for block_idx, block in enumerate(_coarse_blocks(session_events), start=1):
             start_ms, end_ms = block[0]["ts_ms"], block[-1]["ts_ms"]
             candidates = [
-                r for r in results
+                r
+                for r in results
                 if r["timestamp_ms"] >= start_ms - MATCH_TOLERANCE_MS
                 and r["est_start_ms"] <= end_ms + MATCH_TOLERANCE_MS
             ]
 
-            run_idx = 0
-            for result, run_events in _runs(block, candidates):
-                run_idx += 1
+            for run_idx, (result, run_events) in enumerate(_runs(block, candidates), start=1):
                 attempt_count += 1
                 attempt_id = f"{session_id}#{block_idx}.{run_idx}"
                 if result is None:
@@ -264,21 +297,27 @@ def segment_and_match(con: duckdb.DuckDBPyConnection) -> None:
                     expected = result["expected_chars"]
                     confidence = min(1.0, len(run_events) / expected) if expected else 0.8
                     method = "sliced_by_result_window"
-                attempt_rows.append({
-                    "attempt_id": attempt_id,
-                    "session_id": session_id,
-                    "start_ms": run_events[0]["ts_ms"],
-                    "end_ms": run_events[-1]["ts_ms"],
-                    "event_count": len(run_events),
-                    "result_id": result_id,
-                    "match_confidence": confidence,
-                    "match_method": method,
-                })
-                for ev in run_events:
-                    event_assignments.append({
-                        "session_id": ev["session_id"], "part": ev["part"],
-                        "seq": ev["seq"], "attempt_id": attempt_id,
-                    })
+                attempt_rows.append(
+                    {
+                        "attempt_id": attempt_id,
+                        "session_id": session_id,
+                        "start_ms": run_events[0]["ts_ms"],
+                        "end_ms": run_events[-1]["ts_ms"],
+                        "event_count": len(run_events),
+                        "result_id": result_id,
+                        "match_confidence": confidence,
+                        "match_method": method,
+                    }
+                )
+                event_assignments.extend(
+                    {
+                        "session_id": ev["session_id"],
+                        "part": ev["part"],
+                        "seq": ev["seq"],
+                        "attempt_id": attempt_id,
+                    }
+                    for ev in run_events
+                )
 
     if attempt_rows:
         adf = pd.DataFrame(attempt_rows)
@@ -304,6 +343,7 @@ def segment_and_match(con: duckdb.DuckDBPyConnection) -> None:
 # ---------------------------------------------------------------------------
 # phantom keystroke cleanup
 # ---------------------------------------------------------------------------
+
 
 def remove_phantom_double_spaces(con: duckdb.DuckDBPyConnection) -> None:
     """Delete the second keydown of any back-to-back-space pair within an
@@ -340,7 +380,7 @@ def remove_phantom_double_spaces(con: duckdb.DuckDBPyConnection) -> None:
     clilog.info("build_db", f"removed {len(victims)} phantom double-space keystrokes")
 
 
-def main():
+def main() -> None:
     con = db.connect()
     db.rebuild_schema(con)
     load_results(con)

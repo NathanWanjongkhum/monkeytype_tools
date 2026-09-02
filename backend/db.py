@@ -6,6 +6,7 @@ sources (monkeytype_results.json, data/keylogs/**/*.json), which remain the
 source of truth. Deleting typing.duckdb and rerunning build_db.py is always
 safe.
 """
+
 from pathlib import Path
 
 import duckdb

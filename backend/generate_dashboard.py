@@ -10,6 +10,7 @@ Usage:
     python3 generate_dashboard.py --no-open   # refresh, skip the browser
     python3 generate_dashboard.py --offline   # rebuild from local data only
 """
+
 import argparse
 import socket
 import subprocess
@@ -18,6 +19,7 @@ import threading
 import time
 import webbrowser
 from pathlib import Path
+from typing import IO, TypedDict
 
 import clilog
 import refresh
@@ -26,8 +28,16 @@ HERE = Path(__file__).parent
 API_PORT = 8000
 VITE_PORT = 5173
 LOG_DIR = HERE / ".dashboard_logs"
+PORT_WAIT_TIMEOUT_S = 20
 
-SERVICES = {
+
+class ServiceSpec(TypedDict):
+    port: int
+    cmd: list[str]
+    cwd: Path
+
+
+SERVICES: dict[str, ServiceSpec] = {
     "server": {
         "port": API_PORT,
         "cmd": [sys.executable, "-m", "uvicorn", "server:app", "--port", str(API_PORT)],
@@ -47,7 +57,7 @@ def _port_open(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
-def _wait_for_port(port: int, timeout: float = 20) -> bool:
+def _wait_for_port(port: int, timeout: float = PORT_WAIT_TIMEOUT_S) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
         if _port_open(port):
@@ -56,18 +66,19 @@ def _wait_for_port(port: int, timeout: float = 20) -> bool:
     return False
 
 
-def _stream(name: str, proc: subprocess.Popen, log_file) -> None:
+def _stream(name: str, proc: subprocess.Popen[str], log_file: IO[str]) -> None:
     """Relay a supervised subprocess's output live, tagged and colored by
     source, while also keeping the raw log file for post-mortems."""
-    for line in proc.stdout:
-        log_file.write(line)
-        line = line.rstrip("\n")
-        if line:
-            print(f"{clilog.tag(name)} {line}")
+    if proc.stdout is not None:
+        for raw_line in proc.stdout:
+            log_file.write(raw_line)
+            line = raw_line.rstrip("\n")
+            if line:
+                print(f"{clilog.tag(name)} {line}")
     log_file.close()
 
 
-def start_service(name: str) -> subprocess.Popen | None:
+def start_service(name: str) -> subprocess.Popen[str] | None:
     """Start a service if its port is free. Returns the Popen handle if we
     started it (and are therefore responsible for it), None if it was
     already running (someone else owns it)."""
@@ -77,18 +88,22 @@ def start_service(name: str) -> subprocess.Popen | None:
         return None
 
     LOG_DIR.mkdir(exist_ok=True)
-    log_file = open(LOG_DIR / f"{name}.log", "w")
-    proc = subprocess.Popen(
+    log_file = (LOG_DIR / f"{name}.log").open("w")
+    proc = subprocess.Popen(  # noqa: S603 -- cmd is a hardcoded entry from SERVICES, not user input
         spec["cmd"], cwd=spec["cwd"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
     )
     threading.Thread(target=_stream, args=(name, proc, log_file), daemon=True).start()
 
     if not _wait_for_port(spec["port"]):
-        clilog.warn(name, f"still not up on :{spec['port']} after 20s, see {LOG_DIR}/{name}.log")
+        clilog.warn(
+            name,
+            f"still not up on :{spec['port']} after {PORT_WAIT_TIMEOUT_S}s, "
+            f"see {LOG_DIR}/{name}.log",
+        )
     return proc
 
 
-def watch(owned: dict[str, subprocess.Popen]) -> None:
+def watch(owned: dict[str, subprocess.Popen[str]]) -> None:
     """Block for as long as the services we started stay up. If one exits
     early, say so and keep watching whatever's left. Ctrl+C shuts the rest
     down cleanly."""
@@ -104,7 +119,8 @@ def watch(owned: dict[str, subprocess.Popen]) -> None:
                     continue
                 del alive[name]
                 log = clilog.ok if code == 0 else clilog.error
-                log(name, f"exited (code {code})" + (f", {', '.join(alive)} still up" if alive else ""))
+                still_up = f", {', '.join(alive)} still up" if alive else ""
+                log(name, f"exited (code {code}){still_up}")
             if alive:
                 time.sleep(0.5)
     except KeyboardInterrupt:
@@ -119,7 +135,7 @@ def watch(owned: dict[str, subprocess.Popen]) -> None:
                 proc.kill()
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-open", action="store_true", help="don't launch a browser")
     ap.add_argument("--offline", action="store_true", help="rebuild from local data only")

@@ -7,6 +7,7 @@ Usage:
     python3 import_keylogs.py
     python3 import_keylogs.py --source ~/Downloads/monkeytype-keylogs --dest data/keylogs
 """
+
 import argparse
 import json
 import shutil
@@ -16,14 +17,10 @@ from pathlib import Path
 import clilog
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument(
-        "--source", default=str(Path.home() / "Downloads" / "monkeytype-keylogs")
-    )
-    ap.add_argument(
-        "--dest", default=str(Path(__file__).parent.parent / "data" / "keylogs")
-    )
+    ap.add_argument("--source", default=str(Path.home() / "Downloads" / "monkeytype-keylogs"))
+    ap.add_argument("--dest", default=str(Path(__file__).parent.parent / "data" / "keylogs"))
     args = ap.parse_args()
 
     source = Path(args.source)
@@ -40,7 +37,7 @@ def main():
     moved, skipped = 0, 0
     for f in files:
         try:
-            with open(f) as fh:
+            with f.open() as fh:
                 json.load(fh)
         except (json.JSONDecodeError, OSError):
             clilog.warn("keylogs", f"skip (unreadable, maybe still being written): {f.name}")

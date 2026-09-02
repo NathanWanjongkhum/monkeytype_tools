@@ -12,11 +12,19 @@ Usage:
     python3 analyze_keylog.py data/keylogs/2026-08-23/*.json
     python3 analyze_keylog.py some/other/file.json
 """
+
 import json
 import sys
 from collections import defaultdict
 from pathlib import Path
 from statistics import median
+from typing import TypedDict
+
+
+class KeyEvent(TypedDict):
+    ts: int
+    key: str
+
 
 DEFAULT_DIR = Path(__file__).parent.parent / "data" / "keylogs"
 MAX_GAP_MS = 2000  # bigger gaps are a pause or a new test, not real bigram timing
@@ -24,9 +32,9 @@ MIN_SAMPLES = 5
 TOP_N = 30
 
 
-def resolve_paths(args):
+def resolve_paths(args: list[str]) -> list[Path]:
     if args:
-        paths = []
+        paths: list[Path] = []
         for a in args:
             p = Path(a)
             paths.extend(sorted(p.glob("**/*.json")) if p.is_dir() else [p])
@@ -41,10 +49,10 @@ def resolve_paths(args):
     return sorted(DEFAULT_DIR.glob("**/*.json"))
 
 
-def load_events(paths):
-    events = []
+def load_events(paths: list[Path]) -> list[KeyEvent]:
+    events: list[KeyEvent] = []
     for p in paths:
-        with open(p) as f:
+        with p.open() as f:
             payload = json.load(f)
         # accept either the {..., "events": [...]} envelope from
         # keylog_server.py or a bare array from an older manual export
@@ -52,9 +60,9 @@ def load_events(paths):
     return events
 
 
-def bigram_latencies(events):
-    latencies = defaultdict(list)
-    prev = None
+def bigram_latencies(events: list[KeyEvent]) -> dict[str, list[int]]:
+    latencies: dict[str, list[int]] = defaultdict(list)
+    prev: KeyEvent | None = None
     for e in sorted(events, key=lambda e: e["ts"]):
         key = e["key"]
         if len(key) == 1 and prev is not None and len(prev["key"]) == 1:
@@ -65,7 +73,7 @@ def bigram_latencies(events):
     return latencies
 
 
-def main():
+def main() -> None:
     paths = resolve_paths(sys.argv[1:])
     events = load_events(paths)
     print(f"Loaded {len(events)} events from {len(paths)} file(s)")

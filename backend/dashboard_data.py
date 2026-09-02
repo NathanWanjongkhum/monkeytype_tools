@@ -4,14 +4,22 @@ JSON and frontend/ renders it. Split out of what used to be
 generate_dashboard.py so the compute layer has no presentation code mixed
 into it.
 """
-import json
-import math
 
+import json
+from typing import Any
+
+import duckdb
 import numpy as np
+import pandas as pd
 
 MAX_GAP_MS = 2000
 MIN_SAMPLES = 5
 RECENT_N = 10
+MIN_LINREG_POINTS = 2
+MIN_STD_SAMPLES = 2
+ACCURACY_FLOOR_PCT = 90
+BIGRAM_LENGTH = 2
+ROW_SKIP_THRESHOLD = 2
 
 # Standard QWERTY touch-typing chart: hand, finger rank (1=index..4=pinky),
 # row (0=top, 1=home, 2=bottom). Each index finger covers two columns: its
@@ -55,19 +63,66 @@ STRETCH_KEYS = {"t", "g", "b", "y", "h", "n"}
 # Physical QWERTY layout, used only to build CHAR_TO_KEY below (the frontend
 # owns its own copy for drawing the heatmap grid).
 KEYBOARD_ROWS = [
-    [("`", "~"), ("1", "!"), ("2", "@"), ("3", "#"), ("4", "$"), ("5", "%"),
-     ("6", "^"), ("7", "&"), ("8", "*"), ("9", "("), ("0", ")"), ("-", "_"), ("=", "+")],
-    [("q", None), ("w", None), ("e", None), ("r", None), ("t", None), ("y", None),
-     ("u", None), ("i", None), ("o", None), ("p", None), ("[", "{"), ("]", "}"), ("\\", "|")],
-    [("a", None), ("s", None), ("d", None), ("f", None), ("g", None), ("h", None),
-     ("j", None), ("k", None), ("l", None), (";", ":"), ("'", '"')],
-    [("z", None), ("x", None), ("c", None), ("v", None), ("b", None), ("n", None),
-     ("m", None), (",", "<"), (".", ">"), ("/", "?")],
+    [
+        ("`", "~"),
+        ("1", "!"),
+        ("2", "@"),
+        ("3", "#"),
+        ("4", "$"),
+        ("5", "%"),
+        ("6", "^"),
+        ("7", "&"),
+        ("8", "*"),
+        ("9", "("),
+        ("0", ")"),
+        ("-", "_"),
+        ("=", "+"),
+    ],
+    [
+        ("q", None),
+        ("w", None),
+        ("e", None),
+        ("r", None),
+        ("t", None),
+        ("y", None),
+        ("u", None),
+        ("i", None),
+        ("o", None),
+        ("p", None),
+        ("[", "{"),
+        ("]", "}"),
+        ("\\", "|"),
+    ],
+    [
+        ("a", None),
+        ("s", None),
+        ("d", None),
+        ("f", None),
+        ("g", None),
+        ("h", None),
+        ("j", None),
+        ("k", None),
+        ("l", None),
+        (";", ":"),
+        ("'", '"'),
+    ],
+    [
+        ("z", None),
+        ("x", None),
+        ("c", None),
+        ("v", None),
+        ("b", None),
+        ("n", None),
+        ("m", None),
+        (",", "<"),
+        (".", ">"),
+        ("/", "?"),
+    ],
 ]
 SPACE_KEY = " "
 
 
-def _build_char_to_key():
+def _build_char_to_key() -> dict[str, str]:
     mapping = {SPACE_KEY: SPACE_KEY}
     for row in KEYBOARD_ROWS:
         for base, shifted in row:
@@ -95,12 +150,18 @@ BIGRAM_CATEGORIES = [
     (
         "awkward_roll",
         "Outward and descending rolls",
-        "Same-hand sequence moves toward the pinky, or drops a row, against the hand's natural inward curl.",
+        (
+            "Same-hand sequence moves toward the pinky, or drops a row, against "
+            "the hand's natural inward curl."
+        ),
     ),
     (
         "lsb",
         "Lateral-stretch bigrams (LSB)",
-        "Index finger reaches into its stretch column (t/g/b or y/h/n) while another finger on that hand holds position.",
+        (
+            "Index finger reaches into its stretch column (t/g/b or y/h/n) while "
+            "another finger on that hand holds position."
+        ),
     ),
 ]
 
@@ -126,7 +187,7 @@ POPULAR_TESTS = [
 # ---------------------------------------------------------------------------
 
 
-def load_results_db(con):
+def load_results_db(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     df = con.execute(
         "SELECT ts AS timestamp, wpm, acc, consistency, mode, mode2, "
         "test_duration AS testDuration, raw_wpm, restart_count, "
@@ -137,7 +198,9 @@ def load_results_db(con):
     return df.reset_index(drop=True)
 
 
-def load_bigram_rows_db(con):
+def load_bigram_rows_db(
+    con: duckdb.DuckDBPyConnection,
+) -> tuple[list[dict[str, Any]], int, int]:
     """Bigram latency, sourced from typing.duckdb instead of rescanning
     data/keylogs/ directly. Pairs are taken within an Attempt, not a whole
     Session, because a Session can chain several tests back-to-back with no
@@ -156,7 +219,9 @@ def load_bigram_rows_db(con):
     "==", "atm") were coming from. See docs/adr/0001-duckdb-derived-cache.md
     for why unmatched Attempts are kept in the DB rather than discarded -
     they still need excluding here, at the point stats get computed."""
-    rows = con.execute(f"""
+    rows = (
+        con.execute(
+            """
         WITH matched_events AS (
             SELECT ke.attempt_id, ke.ts_ms, ke.key
             FROM keylog_events ke
@@ -173,32 +238,38 @@ def load_bigram_rows_db(con):
             SELECT prev_key || key AS bigram, ts_ms - prev_ts AS gap
             FROM ordered
             WHERE length(key) = 1 AND length(prev_key) = 1
-              AND ts_ms - prev_ts > 0 AND ts_ms - prev_ts <= {MAX_GAP_MS}
+              AND ts_ms - prev_ts > 0 AND ts_ms - prev_ts <= ?
         )
         SELECT bigram, count(*) AS n, median(gap) AS median, avg(gap) AS mean
         FROM pairs
         GROUP BY bigram
-        HAVING count(*) >= {MIN_SAMPLES}
+        HAVING count(*) >= ?
         ORDER BY median DESC
-    """).fetchdf().to_dict("records")
+        """,
+            [MAX_GAP_MS, MIN_SAMPLES],
+        )
+        .fetchdf()
+        .to_dict("records")
+    )
 
-    n_events = con.execute("""
+    events_row = con.execute("""
         SELECT count(*) FROM keylog_events ke
         JOIN attempts a ON a.attempt_id = ke.attempt_id
         WHERE a.result_id IS NOT NULL
-    """).fetchone()[0]
-    n_sessions = con.execute(
-        "SELECT count(DISTINCT session_id) FROM session_parts"
-    ).fetchone()[0]
+    """).fetchone()
+    sessions_row = con.execute("SELECT count(DISTINCT session_id) FROM session_parts").fetchone()
+    n_events = events_row[0] if events_row else 0
+    n_sessions = sessions_row[0] if sessions_row else 0
     return rows, n_events, n_sessions
 
 
-def load_bigram_pairs_db(con):
+def load_bigram_pairs_db(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     """Same attempt-scoped LAG pairing as load_bigram_rows_db, but one row
     per keystroke pair (bigram, ts_ms, gap) instead of aggregated medians -
     compute_drill_validation needs to slice by time window relative to a
     specific tagged completion, not the whole history at once."""
-    return con.execute(f"""
+    return con.execute(
+        """
         WITH matched_events AS (
             SELECT ke.attempt_id, ke.ts_ms, ke.key
             FROM keylog_events ke
@@ -214,21 +285,24 @@ def load_bigram_pairs_db(con):
         SELECT prev_key || key AS bigram, ts_ms, ts_ms - prev_ts AS gap
         FROM ordered
         WHERE length(key) = 1 AND length(prev_key) = 1
-          AND ts_ms - prev_ts > 0 AND ts_ms - prev_ts <= {MAX_GAP_MS}
-    """).fetchdf()
+          AND ts_ms - prev_ts > 0 AND ts_ms - prev_ts <= ?
+        """,
+        [MAX_GAP_MS],
+    ).fetchdf()
 
 
-DRILL_TAG_OVERRIDES = {"awkward_roll": "drill-roll"}  # keep in sync with the userscript's DRILL_TAG_OVERRIDES
+# keep in sync with the userscript's DRILL_TAG_OVERRIDES
+DRILL_TAG_OVERRIDES = {"awkward_roll": "drill-roll"}
 
 
-def tag_name_for_category(key):
+def tag_name_for_category(key: str) -> str:
     """`drill-<category>`, except where the category name itself is too
     long for Monkeytype's tag-name length limit (awkward_roll -> drill-roll,
     created by hand to fit)."""
     return DRILL_TAG_OVERRIDES.get(key, f"drill-{key}")
 
 
-def load_tagged_drill_completions_db(con):
+def load_tagged_drill_completions_db(con: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
     """Genuine drill completions: a matched Attempt whose Result carries the
     `drill-<category>` tag that the keylogger userscript applies after a
     completed custom-mode drill test, joined back to the session_parts.drill
@@ -240,7 +314,8 @@ def load_tagged_drill_completions_db(con):
     actually matches the manifest's own category are trusted - a stale tag
     from a since-changed drill, or a hand-applied tag with no matching
     session, is dropped rather than guessed at."""
-    rows = con.execute("""
+    rows = (
+        con.execute("""
         SELECT a.attempt_id, a.end_ms, r.tags, any_value(sp.drill) AS drill
         FROM attempts a
         JOIN results r ON r.result_id = a.result_id
@@ -248,9 +323,12 @@ def load_tagged_drill_completions_db(con):
         JOIN session_parts sp ON sp.session_id = ke.session_id AND sp.part = ke.part
         WHERE a.result_id IS NOT NULL AND sp.drill IS NOT NULL AND r.tags IS NOT NULL
         GROUP BY a.attempt_id, a.end_ms, r.tags
-    """).fetchdf().to_dict("records")
+    """)
+        .fetchdf()
+        .to_dict("records")
+    )
 
-    completions = []
+    completions: list[dict[str, Any]] = []
     for r in rows:
         manifest = json.loads(r["drill"]) if isinstance(r["drill"], str) else r["drill"]
         if not manifest or not manifest.get("category") or not manifest.get("bigrams"):
@@ -259,16 +337,18 @@ def load_tagged_drill_completions_db(con):
         expected_tag = tag_name_for_category(manifest["category"])
         if expected_tag not in tags:
             continue
-        completions.append({
-            "attempt_id": r["attempt_id"],
-            "end_ms": r["end_ms"],
-            "category": manifest["category"],
-            "bigrams": manifest["bigrams"],
-        })
+        completions.append(
+            {
+                "attempt_id": r["attempt_id"],
+                "end_ms": r["end_ms"],
+                "category": manifest["category"],
+                "bigrams": manifest["bigrams"],
+            }
+        )
     return completions
 
 
-def compute_drill_validation(con):
+def compute_drill_validation(con: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
     """For every genuine (tagged) drill completion, compares each targeted
     bigram's keystroke latency from before that completion to after it -
     the passive validation signal from docs/adr/0003-drill-completion-
@@ -296,28 +376,35 @@ def compute_drill_validation(con):
             if len(before) < MIN_SAMPLES or len(after) < MIN_SAMPLES:
                 continue
             before_median, after_median = before.median(), after.median()
-            occurrences_by_bigram.setdefault(bigram, []).append({
-                "category": c["category"],
-                "before_median": before_median,
-                "after_median": after_median,
-                "delta_ms": before_median - after_median,
-            })
+            occurrences_by_bigram.setdefault(bigram, []).append(
+                {
+                    "category": c["category"],
+                    "before_median": before_median,
+                    "after_median": after_median,
+                    "delta_ms": before_median - after_median,
+                }
+            )
 
     report = []
     for bigram, occurrences in occurrences_by_bigram.items():
-        report.append({
-            "bigram": bigram,
-            "category": occurrences[-1]["category"],  # most recent completion's category
-            "occurrences": len(occurrences),
-            "avg_before_median": sum(o["before_median"] for o in occurrences) / len(occurrences),
-            "avg_after_median": sum(o["after_median"] for o in occurrences) / len(occurrences),
-            "avg_delta_ms": sum(o["delta_ms"] for o in occurrences) / len(occurrences),
-        })
+        report.append(
+            {
+                "bigram": bigram,
+                "category": occurrences[-1]["category"],  # most recent completion's category
+                "occurrences": len(occurrences),
+                "avg_before_median": sum(o["before_median"] for o in occurrences)
+                / len(occurrences),
+                "avg_after_median": sum(o["after_median"] for o in occurrences) / len(occurrences),
+                "avg_delta_ms": sum(o["delta_ms"] for o in occurrences) / len(occurrences),
+            }
+        )
     report.sort(key=lambda r: -r["avg_delta_ms"])
     return report
 
 
-def load_key_stats_db(con):
+def load_key_stats_db(
+    con: duckdb.DuckDBPyConnection,
+) -> tuple[dict[str, int], dict[str, float]]:
     """Per-key frequency (raw press count) and per-key latency (median gap
     ending on that key), for the keyboard heatmap. The keylogger records the
     character actually typed, not the physical key + modifier state, so
@@ -331,7 +418,7 @@ def load_key_stats_db(con):
     counting events from Attempts matched to a real result - see that
     function's docstring for why unmatched Attempts (stray typing outside
     an actual test) get excluded here rather than just in the DB."""
-    freq_by_key = {}
+    freq_by_key: dict[str, int] = {}
     for char, n in con.execute("""
         SELECT ke.key, count(*)
         FROM keylog_events ke
@@ -342,7 +429,8 @@ def load_key_stats_db(con):
         phys_key = CHAR_TO_KEY.get(char, char)
         freq_by_key[phys_key] = freq_by_key.get(phys_key, 0) + n
 
-    gap_rows = con.execute(f"""
+    gap_rows = con.execute(
+        """
         WITH matched_events AS (
             SELECT ke.attempt_id, ke.ts_ms, ke.key
             FROM keylog_events ke
@@ -358,10 +446,12 @@ def load_key_stats_db(con):
         SELECT key, ts_ms - prev_ts AS gap
         FROM ordered
         WHERE length(key) = 1 AND length(prev_key) = 1
-          AND ts_ms - prev_ts > 0 AND ts_ms - prev_ts <= {MAX_GAP_MS}
-    """).fetchall()
+          AND ts_ms - prev_ts > 0 AND ts_ms - prev_ts <= ?
+        """,
+        [MAX_GAP_MS],
+    ).fetchall()
 
-    gaps_by_key = {}
+    gaps_by_key: dict[str, list[int]] = {}
     for char, gap in gap_rows:
         phys_key = CHAR_TO_KEY.get(char, char)
         gaps_by_key.setdefault(phys_key, []).append(gap)
@@ -379,18 +469,18 @@ def load_key_stats_db(con):
 # ---------------------------------------------------------------------------
 
 
-def linreg(x, y):
+def linreg(x: object, y: object) -> tuple[float, float, float]:
     """Return (slope, intercept, pearson_r). x, y are equal-length sequences."""
-    x = np.asarray(x, dtype=float)
-    y = np.asarray(y, dtype=float)
-    if len(x) < 2 or np.std(x) == 0:
-        return 0.0, float(y[0]) if len(y) else 0.0, 0.0
-    slope, intercept = np.polyfit(x, y, 1)
-    r = float(np.corrcoef(x, y)[0, 1]) if np.std(y) > 0 else 0.0
+    xa = np.asarray(x, dtype=float)
+    ya = np.asarray(y, dtype=float)
+    if len(xa) < MIN_LINREG_POINTS or np.std(xa) == 0:
+        return 0.0, float(ya[0]) if len(ya) else 0.0, 0.0
+    slope, intercept = np.polyfit(xa, ya, 1)
+    r = float(np.corrcoef(xa, ya)[0, 1]) if np.std(ya) > 0 else 0.0
     return float(slope), float(intercept), r
 
 
-def compute_kpis(df):
+def compute_kpis(df: pd.DataFrame) -> dict[str, Any]:
     n = len(df)
     recent = df.tail(RECENT_N)
     first = df.head(RECENT_N)
@@ -427,23 +517,25 @@ def compute_kpis(df):
         "avg_errors_recent": float(recent["error_count"].mean()),
         "avg_errors_first": float(first["error_count"].mean()),
         "total_minutes_typing": total_seconds / 60,
-        "date_span_days": (
-            df["timestamp"].iloc[-1] - df["timestamp"].iloc[0]
-        ).total_seconds()
+        "date_span_days": (df["timestamp"].iloc[-1] - df["timestamp"].iloc[0]).total_seconds()
         / 86400,
     }
 
 
-def compute_insights(df, bigram_rows):
+def compute_insights(df: pd.DataFrame, bigram_rows: list[dict[str, Any]]) -> dict[str, Any]:
     idx = np.arange(len(df))
     wpm_slope, _, wpm_r = linreg(idx, df["wpm"])
     acc_slope, _, _ = linreg(idx, df["acc"])
 
     half = len(df) // 2
-    acc_std_first = float(df["acc"].iloc[:half].std()) if half >= 2 else None
-    acc_std_second = float(df["acc"].iloc[half:].std()) if len(df) - half >= 2 else None
+    acc_std_first = float(df["acc"].iloc[:half].std()) if half >= MIN_STD_SAMPLES else None
+    acc_std_second = (
+        float(df["acc"].iloc[half:].std()) if len(df) - half >= MIN_STD_SAMPLES else None
+    )
 
-    acc_wpm_r = float(np.corrcoef(df["acc"], df["wpm"])[0, 1]) if len(df) >= 2 else 0.0
+    acc_wpm_r = (
+        float(np.corrcoef(df["acc"], df["wpm"])[0, 1]) if len(df) >= MIN_LINREG_POINTS else 0.0
+    )
     acc_wpm_slope, acc_wpm_intercept, _ = linreg(df["wpm"], df["acc"])
 
     # Speed change per hour of practice: regress wpm against cumulative
@@ -464,22 +556,22 @@ def compute_insights(df, bigram_rows):
         "acc_wpm_slope": acc_wpm_slope,
         "acc_wpm_intercept": acc_wpm_intercept,
         "wpm_per_hour_typing": wpm_per_hour_slope,
-        "has_tags": False,  # set by caller once tag data is checked
         "bigram_rows": bigram_rows,
     }
 
 
-def compute_popular_tests(df):
-    def bucket(row):
-        if row["mode"] == "quote":
+def compute_popular_tests(df: pd.DataFrame) -> list[dict[str, Any]]:
+    def bucket(row: pd.Series) -> tuple[str, str | None]:
+        mode = str(row["mode"])
+        if mode == "quote":
             return ("quote", None)
-        key = (row["mode"], str(row["mode2"]))
+        key = (mode, str(row["mode2"]))
         return key if key in POPULAR_TESTS else ("other", None)
 
     df = df.copy()
     df["_bucket"] = df.apply(bucket, axis=1)
 
-    rows = []
+    rows: list[dict[str, Any]] = []
     for mode, mode2 in POPULAR_TESTS:
         sub = df[df["_bucket"] == (mode, mode2)]
         label = f"{mode} {mode2}" if mode2 else mode
@@ -508,14 +600,14 @@ def compute_popular_tests(df):
     return rows
 
 
-def display_bigram(bigram):
+def display_bigram(bigram: str) -> str:
     # A leading/trailing space (word-boundary bigrams like " b") collapses
     # under normal HTML whitespace rules and becomes indistinguishable from
     # a bare "b". Swap in a visible space glyph so it stays legible.
     return bigram.replace(" ", "␣")
 
 
-def classify_bigram(bigram):
+def classify_bigram(bigram: str) -> set[str]:
     """Tags a two-character bigram with the finger-mechanics categories it
     matches, using FINGER_MAP. Tags aren't mutually exclusive: a same-finger
     bigram that also skips two rows gets both "sfb" and "row_skip", matching
@@ -523,7 +615,7 @@ def classify_bigram(bigram):
     these as independent metrics rather than a single classification.
     Cross-hand bigrams and keys outside the letter grid (space, digits,
     most punctuation) never match anything here."""
-    if len(bigram) != 2:
+    if len(bigram) != BIGRAM_LENGTH:
         return set()
     a, b = bigram
     if a not in FINGER_MAP or b not in FINGER_MAP or a == b:
@@ -533,11 +625,11 @@ def classify_bigram(bigram):
     if hand_a != hand_b:
         return set()
 
-    tags = set()
+    tags: set[str] = set()
     same_finger = rank_a == rank_b
     if same_finger:
         tags.add("sfb")
-        if abs(row_a - row_b) >= 2:
+        if abs(row_a - row_b) >= ROW_SKIP_THRESHOLD:
             tags.add("row_skip")
     if row_b > row_a or (not same_finger and rank_b > rank_a):
         tags.add("awkward_roll")
@@ -546,7 +638,9 @@ def classify_bigram(bigram):
     return tags
 
 
-def _weighted_median_and_representative(rows):
+def _weighted_median_and_representative(
+    rows: list[dict[str, Any]],
+) -> tuple[float, dict[str, Any]] | tuple[None, None]:
     """Approximates an occurrence-weighted median from per-bigram summary
     stats. bigram_rows only carries each bigram's own n/median/mean, not raw
     per-keystroke gaps, so the weighted median is approximated the same way
@@ -571,7 +665,12 @@ def _weighted_median_and_representative(rows):
     }
 
 
-def compute_bigram_ergonomics(bigram_rows):
+BigramErgonomics = tuple[
+    float | None, float | None, dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]]
+]
+
+
+def compute_bigram_ergonomics(bigram_rows: list[dict[str, Any]]) -> BigramErgonomics:
     """Aggregate the same trustworthy bigrams (bigram_rows, already past
     MIN_SAMPLES) by finger-mechanics category. Each category's "avg" is an
     occurrence-weighted mean gap (sum(mean*n)/sum(n)) rather than a mean of
@@ -585,20 +684,16 @@ def compute_bigram_ergonomics(bigram_rows):
     tags_by_bigram = {r["bigram"]: classify_bigram(r["bigram"]) for r in bigram_rows}
 
     total_n = sum(r["n"] for r in bigram_rows)
-    overall_avg = (
-        (sum(r["mean"] * r["n"] for r in bigram_rows) / total_n) if total_n else None
-    )
+    overall_avg = (sum(r["mean"] * r["n"] for r in bigram_rows) / total_n) if total_n else None
     overall_median, overall_representative = _weighted_median_and_representative(bigram_rows)
 
-    category_rows = []
-    detail_rows = []
+    category_rows: list[dict[str, Any]] = []
+    detail_rows: list[dict[str, Any]] = []
     for key, label, desc in BIGRAM_CATEGORIES:
         matches = [r for r in bigram_rows if key in tags_by_bigram[r["bigram"]]]
         n = sum(r["n"] for r in matches)
         avg = (sum(r["mean"] * r["n"] for r in matches) / n) if n else None
-        delta_pct = (
-            ((avg / overall_avg) - 1) * 100 if avg is not None and overall_avg else None
-        )
+        delta_pct = ((avg / overall_avg) - 1) * 100 if avg is not None and overall_avg else None
         median, representative = _weighted_median_and_representative(matches)
         category_rows.append(
             {
@@ -614,26 +709,24 @@ def compute_bigram_ergonomics(bigram_rows):
                 "representative_median": representative["median"] if representative else None,
             }
         )
-        for r in sorted(matches, key=lambda r: -r["median"])[:5]:
-            detail_rows.append({"category": label, **r})
+        detail_rows.extend(
+            {"category": label, **r} for r in sorted(matches, key=lambda r: -r["median"])[:5]
+        )
 
     return overall_avg, overall_median, overall_representative, category_rows, detail_rows
 
 
-def compute_action_plan(kpis, insights, has_tags):
-    actions = []
+def compute_action_plan(
+    kpis: dict[str, Any], insights: dict[str, Any], *, has_tags: bool
+) -> list[dict[str, str]]:
+    actions: list[dict[str, str]] = []
 
-    if (
-        insights["acc_std_first_half"] is not None
-        and insights["acc_std_second_half"] is not None
-    ):
-        stabilizing = (
-            insights["acc_std_second_half"] < insights["acc_std_first_half"] * 0.85
-        )
+    if insights["acc_std_first_half"] is not None and insights["acc_std_second_half"] is not None:
+        stabilizing = insights["acc_std_second_half"] < insights["acc_std_first_half"] * 0.85
     else:
         stabilizing = None
 
-    if kpis["avg_acc_recent"] < 90:
+    if kpis["avg_acc_recent"] < ACCURACY_FLOOR_PCT:
         actions.append(
             {
                 "status": "warning",
@@ -646,18 +739,22 @@ def compute_action_plan(kpis, insights, has_tags):
         actions.append(
             {
                 "status": "warning",
-                "text": f"Accuracy is averaging {kpis['avg_acc_recent']:.1f}% but its spread hasn't "
-                "tightened. Variance in the second half of your tests isn't lower than the "
-                "first half, so it's high but not yet locked in. Keep an eye on it before "
-                "treating speed as the only lever.",
+                "text": (
+                    f"Accuracy is averaging {kpis['avg_acc_recent']:.1f}% but its spread hasn't "
+                    "tightened. Variance in the second half of your tests isn't lower than the "
+                    "first half, so it's high but not yet locked in. Keep an eye on it before "
+                    "treating speed as the only lever."
+                ),
             }
         )
     else:
         actions.append(
             {
                 "status": "good",
-                "text": f"Accuracy is averaging {kpis['avg_acc_recent']:.1f}% and stable. You're clear "
-                "to focus on speed rather than accuracy for now.",
+                "text": (
+                    f"Accuracy is averaging {kpis['avg_acc_recent']:.1f}% and stable. You're "
+                    "clear to focus on speed rather than accuracy for now."
+                ),
             }
         )
 
@@ -665,18 +762,23 @@ def compute_action_plan(kpis, insights, has_tags):
         actions.append(
             {
                 "status": "good",
-                "text": f"WPM is up from {kpis['avg_wpm_first']:.1f} (first {RECENT_N} tests) to "
-                f"{kpis['avg_wpm_recent']:.1f} (last {RECENT_N}). Whatever you're doing is "
-                "working, keep the volume up.",
+                "text": (
+                    f"WPM is up from {kpis['avg_wpm_first']:.1f} (first {RECENT_N} tests) to "
+                    f"{kpis['avg_wpm_recent']:.1f} (last {RECENT_N}). Whatever you're doing is "
+                    "working, keep the volume up."
+                ),
             }
         )
     else:
         actions.append(
             {
                 "status": "warning",
-                "text": f"WPM hasn't moved from {kpis['avg_wpm_first']:.1f} (first {RECENT_N} tests) to "
-                f"{kpis['avg_wpm_recent']:.1f} (last {RECENT_N}). That's a plateau signal. "
-                "Consider targeted weak-bigram drilling instead of more undifferentiated volume.",
+                "text": (
+                    f"WPM hasn't moved from {kpis['avg_wpm_first']:.1f} (first {RECENT_N} tests) "
+                    f"to {kpis['avg_wpm_recent']:.1f} (last {RECENT_N}). That's a plateau signal. "
+                    "Consider targeted weak-bigram drilling instead of more undifferentiated "
+                    "volume."
+                ),
             }
         )
 
