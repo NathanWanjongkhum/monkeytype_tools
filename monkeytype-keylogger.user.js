@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Monkeytype Keystroke Logger
 // @namespace    typing-research
-// @version      3.6
+// @version      3.7
 // @description  Logs per-keystroke timestamps and the active test config on Monkeytype, periodically saved as session files into Downloads, for bigram-latency analysis the public API doesn't expose. Also fetches generated drills from the local dashboard backend, loads them into Monkeytype's custom-text mode, and tags completions for closed-loop validation.
 // @match        https://monkeytype.com/*
 // @grant        GM_download
@@ -11,6 +11,17 @@
   "use strict";
 
   const FLUSH_INTERVAL_MS = 3 * 60 * 1000;
+  // Minimum gap between visibilitychange-triggered flushes - switching tabs
+  // while typing repeatedly would otherwise fire back-to-back ungestured
+  // GM_download calls, which Chrome can throttle/block as "multiple downloads".
+  const MIN_FLUSH_GAP_MS = 5 * 1000;
+  // Live snapshot so a crash/force-quit (no page-lifecycle event fires) doesn't
+  // lose the whole in-flight buffer. Batched, not per-keystroke: localStorage
+  // has no append, so every write re-serializes all of `pending` on the same
+  // thread that produces the keystroke timestamps being measured.
+  const SNAPSHOT_KEY = "mt-logger-snapshot";
+  const SNAPSHOT_EVERY_N = 20;
+  const SNAPSHOT_EVERY_MS = 5 * 1000;
   const DOWNLOAD_SUBFOLDER = "monkeytype-keylogs";
   const sessionId = typeof crypto.randomUUID === "function"
     ? crypto.randomUUID()
@@ -18,6 +29,9 @@
 
   let pending = [];
   let partIndex = 0;
+  let lastFlushAt = 0;
+  let lastSnapshotAt = 0;
+  let eventsSinceSnapshot = 0;
 
   function lastResolvedLetterClasses() {
     const activeWord = document.querySelector("#words .word.active");
@@ -31,7 +45,7 @@
     "keydown",
     (e) => {
       // export hotkey
-      if (e.ctrlKey && e.shiftKey && e.key === "E") return; 
+      if (e.ctrlKey && e.shiftKey && e.key === "E") return;
       // Ignores OS key-repeat firing while a key is held down
       if (e.repeat) return;
       if (e.key.length > 1 && e.key !== "Backspace" && e.key !== " ") return;
@@ -42,7 +56,10 @@
       const ts = Date.now();
       const key = e.key;
 
-      setTimeout(() => pending.push({ ts, key, classes: lastResolvedLetterClasses() }), 0);
+      setTimeout(() => {
+        pending.push({ ts, key, classes: lastResolvedLetterClasses() });
+        maybeSnapshot();
+      }, 0);
     },
     true
   );
@@ -60,28 +77,25 @@
     }
   }
 
-  function saveSession() {
-    if (pending.length === 0) return;
-    const toSave = pending;
-    pending = [];
-    partIndex += 1;
-
-    const now = new Date();
-    const envelope = {
+  function buildEnvelope(events, part) {
+    return {
       schema_version: 3,
       source: "monkeytype-keylogger",
       session_id: sessionId,
-      part: partIndex,
+      part,
       url: location.href,
-      saved_at: now.toISOString(),
+      saved_at: new Date().toISOString(),
       config: currentConfig(),
       drill: pendingDrill,
-      events: toSave,
+      events,
     };
+  }
 
+  function downloadEnvelope(envelope, { recovered = false, onFail } = {}) {
     const blob = new Blob([JSON.stringify(envelope)], { type: "application/json" });
     const blobUrl = URL.createObjectURL(blob);
-    const filename = `${DOWNLOAD_SUBFOLDER}/${isoDate(now)}/${sessionId}-part${partIndex}.json`;
+    const suffix = recovered ? "-recovered" : "";
+    const filename = `${DOWNLOAD_SUBFOLDER}/${isoDate(new Date(envelope.saved_at))}/${envelope.session_id}-part${envelope.part}${suffix}.json`;
 
     GM_download({
       url: blobUrl,
@@ -89,17 +103,95 @@
       saveAs: false,
       onload: () => URL.revokeObjectURL(blobUrl),
       onerror: (err) => {
-        console.warn("[mt-logger] GM_download failed, re-queueing", err);
-        pending = toSave.concat(pending);
-        partIndex -= 1;
+        console.warn("[mt-logger] GM_download failed", err);
+        if (onFail) onFail();
         URL.revokeObjectURL(blobUrl);
       },
     });
   }
 
+  function clearSnapshot() {
+    try {
+      localStorage.removeItem(SNAPSHOT_KEY);
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  function writeSnapshot() {
+    eventsSinceSnapshot = 0;
+    lastSnapshotAt = Date.now();
+    try {
+      localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(buildEnvelope(pending, partIndex + 1)));
+    } catch (e) {
+      console.warn("[mt-logger] snapshot write failed", e);
+    }
+  }
+
+  function maybeSnapshot() {
+    eventsSinceSnapshot += 1;
+    if (eventsSinceSnapshot >= SNAPSHOT_EVERY_N || Date.now() - lastSnapshotAt >= SNAPSHOT_EVERY_MS) {
+      writeSnapshot();
+    }
+  }
+
+  function recoverSnapshot() {
+    let raw;
+    try {
+      raw = localStorage.getItem(SNAPSHOT_KEY);
+    } catch (e) {
+      return;
+    }
+    if (!raw) return;
+    clearSnapshot();
+    try {
+      const snap = JSON.parse(raw);
+      if (snap.events && snap.events.length > 0) {
+        downloadEnvelope(snap, { recovered: true });
+        console.warn(`[mt-logger] recovered ${snap.events.length} events from an unclean previous session`);
+      }
+    } catch (e) {
+      console.warn("[mt-logger] snapshot recovery failed to parse", e);
+    }
+  }
+
+  recoverSnapshot();
+
+  function saveSession() {
+    if (pending.length === 0) return;
+    const toSave = pending;
+    pending = [];
+    partIndex += 1;
+    lastFlushAt = Date.now();
+    eventsSinceSnapshot = 0;
+    lastSnapshotAt = lastFlushAt;
+    clearSnapshot();
+
+    const envelope = buildEnvelope(toSave, partIndex);
+    downloadEnvelope(envelope, {
+      onFail: () => {
+        pending = toSave.concat(pending);
+        partIndex -= 1;
+      },
+    });
+  }
+
+  function throttledSave() {
+    if (Date.now() - lastFlushAt < MIN_FLUSH_GAP_MS) return;
+    saveSession();
+  }
+
   setInterval(saveSession, FLUSH_INTERVAL_MS);
 
-  // Best-effort final save on tab close. 
+  // Earlier flush trigger: fires while the page is still fully alive, unlike
+  // pagehide below, which fires during teardown - after the async hop
+  // GM_download needs (page -> content script -> extension -> downloads API)
+  // can get cut off mid-flight.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") throttledSave();
+  });
+
+  // Best-effort final save on tab close - unthrottled, this is the last chance.
   window.addEventListener("pagehide", saveSession);
 
   document.addEventListener("keydown", (e) => {
