@@ -11,14 +11,8 @@
   "use strict";
 
   const FLUSH_INTERVAL_MS = 3 * 60 * 1000;
-  // Minimum gap between visibilitychange-triggered flushes - switching tabs
-  // while typing repeatedly would otherwise fire back-to-back ungestured
-  // GM_download calls, which Chrome can throttle/block as "multiple downloads".
   const MIN_FLUSH_GAP_MS = 5 * 1000;
-  // Live snapshot so a crash/force-quit (no page-lifecycle event fires) doesn't
-  // lose the whole in-flight buffer. Batched, not per-keystroke: localStorage
-  // has no append, so every write re-serializes all of `pending` on the same
-  // thread that produces the keystroke timestamps being measured.
+
   const SNAPSHOT_KEY = "mt-logger-snapshot";
   const SNAPSHOT_EVERY_N = 20;
   const SNAPSHOT_EVERY_MS = 5 * 1000;
@@ -44,9 +38,7 @@
   document.addEventListener(
     "keydown",
     (e) => {
-      // export hotkey
       if (e.ctrlKey && e.shiftKey && e.key === "E") return;
-      // Ignores OS key-repeat firing while a key is held down
       if (e.repeat) return;
       if (e.key.length > 1 && e.key !== "Backspace" && e.key !== " ") return;
 
@@ -183,15 +175,10 @@
 
   setInterval(saveSession, FLUSH_INTERVAL_MS);
 
-  // Earlier flush trigger: fires while the page is still fully alive, unlike
-  // pagehide below, which fires during teardown - after the async hop
-  // GM_download needs (page -> content script -> extension -> downloads API)
-  // can get cut off mid-flight.
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") throttledSave();
   });
 
-  // Best-effort final save on tab close - unthrottled, this is the last chance.
   window.addEventListener("pagehide", saveSession);
 
   document.addEventListener("keydown", (e) => {
@@ -287,12 +274,6 @@
       console.warn("[mt-logger] no drill available for", manifest && manifest.key);
       return;
     }
-    // manifest.text is already pipe-delimited exactly as drill_practice*.txt
-    // is meant to be pasted - passed through unmodified. Word delimiter must
-    // already be set to "pipe" in Monkeytype's own settings (a one-time
-    // setup step, same as creating the drill-* tags - see the file header)
-    // so this "|" grouping parses as separate words instead of one long
-    // run-on word.
     const text = manifest.text;
 
     pendingDrill = {
@@ -368,7 +349,7 @@
       if (!toggle) {
         console.warn(
           `[mt-logger] could not find tag "${tagName}" in the tag editor - ` +
-            "create it once in Monkeytype's UI (Account > tags) if it doesn't exist yet"
+          "create it once in Monkeytype's UI (Account > tags) if it doesn't exist yet"
         );
         clearPendingDrill();
         return;
