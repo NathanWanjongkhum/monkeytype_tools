@@ -32,3 +32,4 @@ data/*
 .DS_Store
 *.swp
 *.sw?
+*.claude
