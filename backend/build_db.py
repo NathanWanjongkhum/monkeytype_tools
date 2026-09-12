@@ -23,6 +23,7 @@ HERE = Path(__file__).parent
 ROOT = HERE.parent
 DATA_DIR = ROOT / "data"
 RESULTS_JSON = DATA_DIR / "monkeytype_results.json"
+TAGS_JSON = DATA_DIR / "monkeytype_tags.json"
 KEYLOG_DIR = DATA_DIR / "keylogs"
 
 # A coarse block boundary is a gap between consecutive keystrokes bigger
@@ -105,6 +106,19 @@ def load_results(con: duckdb.DuckDBPyConnection) -> None:
     con.execute("INSERT INTO results SELECT * FROM results_df")
     con.unregister("results_df")
     clilog.info("build_db", f"loaded {len(df)} results")
+
+
+def load_tags(con: duckdb.DuckDBPyConnection) -> None:
+    if not TAGS_JSON.exists():
+        clilog.info("build_db", f"no {TAGS_JSON.name}, skipping tags load")
+        return
+
+    raw = json.loads(TAGS_JSON.read_text())
+    df = pd.DataFrame([{"tag_id": t["_id"], "name": t["name"]} for t in raw])
+    con.register("tags_df", df)
+    con.execute("INSERT INTO tags SELECT * FROM tags_df")
+    con.unregister("tags_df")
+    clilog.info("build_db", f"loaded {len(df)} tags")
 
 
 # ---------------------------------------------------------------------------
@@ -384,6 +398,7 @@ def main() -> None:
     con = db.connect()
     db.rebuild_schema(con)
     load_results(con)
+    load_tags(con)
     load_keylog(con)
     segment_and_match(con)
     remove_phantom_double_spaces(con)

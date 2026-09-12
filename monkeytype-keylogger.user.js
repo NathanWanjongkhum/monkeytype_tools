@@ -1,11 +1,21 @@
 // ==UserScript==
 // @name         Monkeytype Keystroke Logger
 // @namespace    typing-research
-// @version      3.7
+// @version      3.10
 // @description  Logs per-keystroke timestamps and the active test config on Monkeytype, periodically saved as session files into Downloads, for bigram-latency analysis the public API doesn't expose. Also fetches generated drills from the local dashboard backend, loads them into Monkeytype's custom-text mode, and tags completions for closed-loop validation.
 // @match        https://monkeytype.com/*
 // @grant        GM_download
 // ==/UserScript==
+
+// One-time setup before the drill panel works:
+//   1. Monkeytype settings > word delimiter > pipe.
+//   2. Create the tags drill-overall, drill-sfb, drill-row_skip, drill-roll,
+//      drill-lsb once (Account > tags) - tags are referenced by ID, not
+//      name, so they must exist before the script can find them. Without
+//      any tags at all, Monkeytype hides the results screen's whole tags
+//      section. drill-roll (not drill-awkward_roll) because Monkeytype's
+//      tag-name length limit rejects the full category name - see
+//      DRILL_TAG_OVERRIDES below.
 
 (function () {
   "use strict";
@@ -214,6 +224,62 @@
     sessionStorage.removeItem(PENDING_DRILL_KEY);
   }
 
+  function armPendingDrill(manifest) {
+    pendingDrill = {
+      category: manifest.key,
+      label: manifest.label,
+      bigrams: manifest.bigrams,
+      generated_at: manifest.generated_at,
+      applied_at: new Date().toISOString(),
+    };
+    sessionStorage.setItem(PENDING_DRILL_KEY, JSON.stringify(pendingDrill));
+  }
+
+  // pendingDrill only survives to the *next* tag-application and is cleared
+  // as soon as that resolves, so without something re-arming it, only the
+  // first attempt of a category ever gets tagged - restarting the same
+  // custom test (Monkeytype keeps serving the same text on its own; nothing
+  // here needs to reapply that) would silently go untagged from the second
+  // attempt on. activeDrillManifest is the "keep drilling this category"
+  // session that re-arms pendingDrill after every completion, until an
+  // explicit signal ends it: the panel button pressed again, or the mode
+  // changing away from "custom" (checked at each re-arm, not polled).
+  const ACTIVE_DRILL_KEY = "mt-logger-active-drill-session";
+
+  function loadActiveDrillManifest() {
+    try {
+      const raw = sessionStorage.getItem(ACTIVE_DRILL_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  let activeDrillManifest = loadActiveDrillManifest();
+  let paintDrillPanel = () => {}; // reassigned once the panel exists
+
+  function startDrillSession(manifest) {
+    activeDrillManifest = manifest;
+    sessionStorage.setItem(ACTIVE_DRILL_KEY, JSON.stringify(manifest));
+    applyDrill(manifest);
+  }
+
+  function stopDrillSession() {
+    activeDrillManifest = null;
+    sessionStorage.removeItem(ACTIVE_DRILL_KEY);
+    paintDrillPanel();
+  }
+
+  function continueDrillSessionIfActive() {
+    if (!activeDrillManifest) return;
+    if ((currentConfig() || {}).mode !== "custom") {
+      console.log("[mt-logger] mode changed away from custom, ending drill session");
+      stopDrillSession();
+      return;
+    }
+    armPendingDrill(activeDrillManifest);
+  }
+
   async function fetchDrillManifest(categoryKey) {
     const res = await fetch(`${BACKEND_BASE}/api/drill-manifest`);
     if (!res.ok) throw new Error(`drill-manifest fetch failed: ${res.status}`);
@@ -276,14 +342,7 @@
     }
     const text = manifest.text;
 
-    pendingDrill = {
-      category: manifest.key,
-      label: manifest.label,
-      bigrams: manifest.bigrams,
-      generated_at: manifest.generated_at,
-      applied_at: new Date().toISOString(),
-    };
-    sessionStorage.setItem(PENDING_DRILL_KEY, JSON.stringify(pendingDrill));
+    armPendingDrill(manifest);
     openCustomTextPopupAndFill(text);
   }
 
@@ -302,19 +361,42 @@
       ["awkward_roll", "Awkward"],
       ["lsb", "LSB"],
     ];
+    const ACTIVE_STYLE = "background:#e2b714;color:#000;";
+    const buttons = {};
+    const paintActive = () => {
+      for (const [key, btn] of Object.entries(buttons)) {
+        btn.style.cssText =
+          "cursor:pointer;padding:4px 6px;" +
+          (activeDrillManifest && activeDrillManifest.key === key ? ACTIVE_STYLE : "");
+      }
+    };
+    paintDrillPanel = paintActive; // let stopDrillSession() repaint on an auto-stop too
     for (const [key, label] of categories) {
       const btn = document.createElement("button");
       btn.textContent = label;
-      btn.style.cssText = "cursor:pointer;padding:4px 6px;";
+      buttons[key] = btn;
       btn.addEventListener("click", async () => {
+        // Click the already-looping category to stop; click any button
+        // (same or different) while stopped to (re)start the loop. Each
+        // click here starts a fresh session with a newly fetched manifest
+        // rather than resuming a stale one - the bigram set behind a
+        // category can have regenerated since the loop was last running.
+        if (activeDrillManifest && activeDrillManifest.key === key) {
+          stopDrillSession();
+          paintActive();
+          return;
+        }
         try {
-          applyDrill(await fetchDrillManifest(key));
+          const manifest = await fetchDrillManifest(key);
+          startDrillSession(manifest);
+          paintActive();
         } catch (e) {
           console.warn("[mt-logger] drill fetch/apply failed", e);
         }
       });
       panel.appendChild(btn);
     }
+    paintActive();
     document.body.appendChild(panel);
   }
 
@@ -343,6 +425,7 @@
       if (!popup) {
         console.warn("[mt-logger] tag popup did not open (no .modal containing \"Edit result tags\" found)");
         clearPendingDrill();
+        continueDrillSessionIfActive();
         return;
       }
       const toggle = findTagToggle(popup, tagName);
@@ -352,6 +435,7 @@
           "create it once in Monkeytype's UI (Account > tags) if it doesn't exist yet"
         );
         clearPendingDrill();
+        continueDrillSessionIfActive();
         return;
       }
       toggle.click();
@@ -363,16 +447,39 @@
         console.warn(`[mt-logger] toggled "${tagName}" but could not find the popup's "save" button - not persisted`);
       }
       clearPendingDrill();
+      continueDrillSessionIfActive();
     }, 300);
   }
+
+  // The last result-id this observer has already started handling. Without
+  // this, "is a drill pending" alone isn't enough to gate on: clicking the
+  // tag popup's own save button closes it, which is itself a DOM mutation
+  // that re-triggers this same observer while still looking at the exact
+  // same results screen - and once continueDrillSessionIfActive() re-arms
+  // pendingDrill synchronously right after resolving, that re-trigger finds
+  // pendingDrill truthy again and reopens/reapplies the tag to the *same*
+  // already-tagged result, repeatedly, for as long as that results screen
+  // stays on screen. Gating on the concrete result-id instead of just
+  // pendingDrill's truthiness only lets a genuinely new completion (a
+  // different id) through.
+  let lastHandledResultId = null;
 
   function watchForCompletion() {
     const observer = new MutationObserver(() => {
       if (!pendingDrill) return;
       const btn = document.querySelector("#result .stats .tags .editTagsButton");
-      if (btn && btn.getAttribute("data-result-id")) {
-        tryApplyPendingTag(btn);
-      }
+      const resultId = btn && btn.getAttribute("data-result-id");
+      if (!resultId || resultId === lastHandledResultId) return;
+      lastHandledResultId = resultId;
+      // Flush now, while pendingDrill is still set, so the part covering
+      // this drill's own keystrokes carries the manifest in its envelope.
+      // The periodic 3-minute saveSession() otherwise almost never lands
+      // between applyDrill() and clearPendingDrill() below - a drill test
+      // finishes in well under that - so without this the manifest is
+      // dropped on essentially every completion, not just unluckily timed
+      // ones.
+      saveSession();
+      tryApplyPendingTag(btn);
     });
     observer.observe(document.body, {
       childList: true,

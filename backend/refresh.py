@@ -16,6 +16,7 @@ from typing import Any, Protocol
 
 import build_db
 import clilog
+from envfile import load_env_file
 
 HERE = Path(__file__).parent
 DATA_DIR = HERE.parent / "data"
@@ -28,20 +29,6 @@ class _MainModule(Protocol):
     """Structural type for a script module invoked as `module.main()`."""
 
     def main(self) -> None: ...
-
-
-def load_env_file() -> None:
-    """Populate os.environ from .env (MONKEYTYPE_APE_KEY=...) if it's not
-    already set, so running the dashboard is enough, no manual `export`."""
-    env_path = HERE / ".env"
-    if not env_path.exists():
-        return
-    for raw_line in env_path.read_text().splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, val = line.partition("=")
-        os.environ.setdefault(key.strip(), val.strip())
 
 
 def call_with_argv(source: str, module: _MainModule, argv: list[str]) -> None:
