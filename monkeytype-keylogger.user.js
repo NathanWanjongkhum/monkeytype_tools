@@ -235,15 +235,6 @@
     sessionStorage.setItem(PENDING_DRILL_KEY, JSON.stringify(pendingDrill));
   }
 
-  // pendingDrill only survives to the *next* tag-application and is cleared
-  // as soon as that resolves, so without something re-arming it, only the
-  // first attempt of a category ever gets tagged - restarting the same
-  // custom test (Monkeytype keeps serving the same text on its own; nothing
-  // here needs to reapply that) would silently go untagged from the second
-  // attempt on. activeDrillManifest is the "keep drilling this category"
-  // session that re-arms pendingDrill after every completion, until an
-  // explicit signal ends it: the panel button pressed again, or the mode
-  // changing away from "custom" (checked at each re-arm, not polled).
   const ACTIVE_DRILL_KEY = "mt-logger-active-drill-session";
 
   function loadActiveDrillManifest() {
@@ -256,7 +247,7 @@
   }
 
   let activeDrillManifest = loadActiveDrillManifest();
-  let paintDrillPanel = () => {}; // reassigned once the panel exists
+  let paintDrillPanel = () => {};
 
   function startDrillSession(manifest) {
     activeDrillManifest = manifest;
@@ -370,17 +361,12 @@
           (activeDrillManifest && activeDrillManifest.key === key ? ACTIVE_STYLE : "");
       }
     };
-    paintDrillPanel = paintActive; // let stopDrillSession() repaint on an auto-stop too
+    paintDrillPanel = paintActive; 
     for (const [key, label] of categories) {
       const btn = document.createElement("button");
       btn.textContent = label;
       buttons[key] = btn;
       btn.addEventListener("click", async () => {
-        // Click the already-looping category to stop; click any button
-        // (same or different) while stopped to (re)start the loop. Each
-        // click here starts a fresh session with a newly fetched manifest
-        // rather than resuming a stale one - the bigram set behind a
-        // category can have regenerated since the loop was last running.
         if (activeDrillManifest && activeDrillManifest.key === key) {
           stopDrillSession();
           paintActive();
@@ -451,17 +437,6 @@
     }, 300);
   }
 
-  // The last result-id this observer has already started handling. Without
-  // this, "is a drill pending" alone isn't enough to gate on: clicking the
-  // tag popup's own save button closes it, which is itself a DOM mutation
-  // that re-triggers this same observer while still looking at the exact
-  // same results screen - and once continueDrillSessionIfActive() re-arms
-  // pendingDrill synchronously right after resolving, that re-trigger finds
-  // pendingDrill truthy again and reopens/reapplies the tag to the *same*
-  // already-tagged result, repeatedly, for as long as that results screen
-  // stays on screen. Gating on the concrete result-id instead of just
-  // pendingDrill's truthiness only lets a genuinely new completion (a
-  // different id) through.
   let lastHandledResultId = null;
 
   function watchForCompletion() {
@@ -471,13 +446,6 @@
       const resultId = btn && btn.getAttribute("data-result-id");
       if (!resultId || resultId === lastHandledResultId) return;
       lastHandledResultId = resultId;
-      // Flush now, while pendingDrill is still set, so the part covering
-      // this drill's own keystrokes carries the manifest in its envelope.
-      // The periodic 3-minute saveSession() otherwise almost never lands
-      // between applyDrill() and clearPendingDrill() below - a drill test
-      // finishes in well under that - so without this the manifest is
-      // dropped on essentially every completion, not just unluckily timed
-      // ones.
       saveSession();
       tryApplyPendingTag(btn);
     });
