@@ -42,9 +42,7 @@ SEGMENT_GAP_MS = 8_000
 MATCH_TOLERANCE_MS = 3_000
 
 
-# ---------------------------------------------------------------------------
 # results
-# ---------------------------------------------------------------------------
 
 
 def load_results(con: duckdb.DuckDBPyConnection) -> None:
@@ -121,9 +119,7 @@ def load_tags(con: duckdb.DuckDBPyConnection) -> None:
     clilog.info("build_db", f"loaded {len(df)} tags")
 
 
-# ---------------------------------------------------------------------------
 # keylog sessions + events
-# ---------------------------------------------------------------------------
 
 
 def load_keylog(con: duckdb.DuckDBPyConnection) -> None:
@@ -195,9 +191,7 @@ def load_keylog(con: duckdb.DuckDBPyConnection) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
 # segmentation + matching: events -> attempts, sliced against result windows
-# ---------------------------------------------------------------------------
 #
 # First pass: gap-based coarse blocks (a gap > SEGMENT_GAP_MS means the user
 # stepped away, not just quick-restarted). This alone can't recover per-test
@@ -354,9 +348,7 @@ def segment_and_match(con: duckdb.DuckDBPyConnection) -> None:
     clilog.info("build_db", f"segmented {attempt_count} attempts, matched {matched_count}")
 
 
-# ---------------------------------------------------------------------------
 # phantom keystroke cleanup
-# ---------------------------------------------------------------------------
 
 
 def remove_phantom_double_spaces(con: duckdb.DuckDBPyConnection) -> None:

@@ -182,9 +182,7 @@ POPULAR_TESTS = [
 ]
 
 
-# ---------------------------------------------------------------------------
 # data loading
-# ---------------------------------------------------------------------------
 
 
 def load_results_db(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
@@ -471,9 +469,7 @@ def load_key_stats_db(
     return freq_by_key, latency_by_key
 
 
-# ---------------------------------------------------------------------------
 # stats / insights
-# ---------------------------------------------------------------------------
 
 
 def linreg(x: object, y: object) -> tuple[float, float, float]:

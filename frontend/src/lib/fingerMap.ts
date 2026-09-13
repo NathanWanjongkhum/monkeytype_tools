@@ -50,9 +50,7 @@ export function glyphCurve(frm: Point, to: Point, anchor: Point | null = null): 
   }
 }
 
-// ---------------------------------------------------------------------------
 // category glyphs: one abstract 4-finger x 3-row grid, four fixed diagrams
-// ---------------------------------------------------------------------------
 
 export const GLYPH_COLS = [8, 24, 40, 56]
 export const GLYPH_ROWS = [8, 23, 38]
@@ -80,9 +78,7 @@ export const CATEGORY_GLYPH_DEFS: Record<string, CategoryGlyphDef> = {
   lsb: { frm: glyphPt(0, 1), to: [16, 8], anchor: glyphPt(1, 1), dashed: false },
 }
 
-// ---------------------------------------------------------------------------
 // per-bigram glyphs: real two-hand grid (4 columns per hand x 3 rows)
-// ---------------------------------------------------------------------------
 
 export const BIGRAM_GLYPH_COLS = [4, 16, 28, 40, 54, 66, 78, 90] // L pinky..index | R index..pinky
 export const BIGRAM_GLYPH_VIEWBOX_W = 98
