@@ -45,7 +45,7 @@ SERVICES: dict[str, ServiceSpec] = {
     },
     "vite": {
         "port": VITE_PORT,
-        "cmd": ["npm", "run", "dev", "--", "--port", str(VITE_PORT)],
+        "cmd": ["bun", "run", "dev", "--", "--port", str(VITE_PORT)],
         "cwd": HERE.parent / "frontend",
     },
 }
