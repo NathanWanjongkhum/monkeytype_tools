@@ -182,9 +182,7 @@ POPULAR_TESTS = [
 ]
 
 
-# ---------------------------------------------------------------------------
 # data loading
-# ---------------------------------------------------------------------------
 
 
 def load_results_db(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
@@ -313,7 +311,14 @@ def load_tagged_drill_completions_db(con: duckdb.DuckDBPyConnection) -> list[dic
     from live data on every dashboard load). Only completions where the tag
     actually matches the manifest's own category are trusted - a stale tag
     from a since-changed drill, or a hand-applied tag with no matching
-    session, is dropped rather than guessed at."""
+    session, is dropped rather than guessed at.
+
+    r.tags holds Monkeytype's raw tag _id's, not names - resolved through
+    the `tags` table (loaded from GET /users/tags, see build_db.load_tags)
+    before comparing against tag_name_for_category. An id with no match
+    there (tags.json never fetched, or the tag predates it) is left as its
+    raw id, which simply never matches any expected name."""
+    tag_names = dict(con.execute("SELECT tag_id, name FROM tags").fetchall())
     rows = (
         con.execute("""
         SELECT a.attempt_id, a.end_ms, r.tags, any_value(sp.drill) AS drill
@@ -333,7 +338,7 @@ def load_tagged_drill_completions_db(con: duckdb.DuckDBPyConnection) -> list[dic
         manifest = json.loads(r["drill"]) if isinstance(r["drill"], str) else r["drill"]
         if not manifest or not manifest.get("category") or not manifest.get("bigrams"):
             continue
-        tags = list(r["tags"]) if r["tags"] is not None else []
+        tags = [tag_names.get(t, t) for t in r["tags"]] if r["tags"] is not None else []
         expected_tag = tag_name_for_category(manifest["category"])
         if expected_tag not in tags:
             continue
@@ -464,9 +469,7 @@ def load_key_stats_db(
     return freq_by_key, latency_by_key
 
 
-# ---------------------------------------------------------------------------
 # stats / insights
-# ---------------------------------------------------------------------------
 
 
 def linreg(x: object, y: object) -> tuple[float, float, float]:

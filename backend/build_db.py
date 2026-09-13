@@ -23,6 +23,7 @@ HERE = Path(__file__).parent
 ROOT = HERE.parent
 DATA_DIR = ROOT / "data"
 RESULTS_JSON = DATA_DIR / "monkeytype_results.json"
+TAGS_JSON = DATA_DIR / "monkeytype_tags.json"
 KEYLOG_DIR = DATA_DIR / "keylogs"
 
 # A coarse block boundary is a gap between consecutive keystrokes bigger
@@ -41,9 +42,7 @@ SEGMENT_GAP_MS = 8_000
 MATCH_TOLERANCE_MS = 3_000
 
 
-# ---------------------------------------------------------------------------
 # results
-# ---------------------------------------------------------------------------
 
 
 def load_results(con: duckdb.DuckDBPyConnection) -> None:
@@ -107,9 +106,20 @@ def load_results(con: duckdb.DuckDBPyConnection) -> None:
     clilog.info("build_db", f"loaded {len(df)} results")
 
 
-# ---------------------------------------------------------------------------
+def load_tags(con: duckdb.DuckDBPyConnection) -> None:
+    if not TAGS_JSON.exists():
+        clilog.info("build_db", f"no {TAGS_JSON.name}, skipping tags load")
+        return
+
+    raw = json.loads(TAGS_JSON.read_text())
+    df = pd.DataFrame([{"tag_id": t["_id"], "name": t["name"]} for t in raw])
+    con.register("tags_df", df)
+    con.execute("INSERT INTO tags SELECT * FROM tags_df")
+    con.unregister("tags_df")
+    clilog.info("build_db", f"loaded {len(df)} tags")
+
+
 # keylog sessions + events
-# ---------------------------------------------------------------------------
 
 
 def load_keylog(con: duckdb.DuckDBPyConnection) -> None:
@@ -181,9 +191,7 @@ def load_keylog(con: duckdb.DuckDBPyConnection) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
 # segmentation + matching: events -> attempts, sliced against result windows
-# ---------------------------------------------------------------------------
 #
 # First pass: gap-based coarse blocks (a gap > SEGMENT_GAP_MS means the user
 # stepped away, not just quick-restarted). This alone can't recover per-test
@@ -340,9 +348,7 @@ def segment_and_match(con: duckdb.DuckDBPyConnection) -> None:
     clilog.info("build_db", f"segmented {attempt_count} attempts, matched {matched_count}")
 
 
-# ---------------------------------------------------------------------------
 # phantom keystroke cleanup
-# ---------------------------------------------------------------------------
 
 
 def remove_phantom_double_spaces(con: duckdb.DuckDBPyConnection) -> None:
@@ -384,6 +390,7 @@ def main() -> None:
     con = db.connect()
     db.rebuild_schema(con)
     load_results(con)
+    load_tags(con)
     load_keylog(con)
     segment_and_match(con)
     remove_phantom_double_spaces(con)

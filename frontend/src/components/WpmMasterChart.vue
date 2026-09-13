@@ -16,9 +16,7 @@ const padB = 28
 const plotW = width - padL - padR
 const plotH = height - padT - padB
 
-// ---------------------------------------------------------------------------
 // filters
-// ---------------------------------------------------------------------------
 
 type TriState = 'all' | 'on' | 'off'
 type WindowChoice = '50' | '100' | '200' | 'all'
@@ -62,17 +60,13 @@ const filtered = computed(() => {
   return arr.slice(Math.max(0, arr.length - n))
 })
 
-// ---------------------------------------------------------------------------
 // trend line toggles
-// ---------------------------------------------------------------------------
 
 const showBest = ref(false)
 const showAvg10 = ref(true)
 const showAvg100 = ref(false)
 
-// ---------------------------------------------------------------------------
 // scales
-// ---------------------------------------------------------------------------
 
 // X is cumulative hours of typing practice, not wall-clock time - matches
 // backend/dashboard_data.py's compute_insights, which regresses wpm against
@@ -151,9 +145,7 @@ const dayLabels = computed(() => {
   return out
 })
 
-// ---------------------------------------------------------------------------
 // per-mode color, dots, PB rings
-// ---------------------------------------------------------------------------
 
 const MODE_COLORS = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)']
 
@@ -180,9 +172,7 @@ const points = computed<Point[]>(() =>
 
 const pbPoints = computed(() => points.value.filter((p) => p.data.is_pb))
 
-// ---------------------------------------------------------------------------
 // trend lines
-// ---------------------------------------------------------------------------
 
 function pathFor(values: number[]): string {
   if (!values.length) return ''
@@ -209,9 +199,7 @@ const bestPath = computed(() => stepPathFor(runningMax(wpmValues.value)))
 const avg10Path = computed(() => pathFor(rollingMean(wpmValues.value, 10)))
 const avg100Path = computed(() => pathFor(rollingMean(wpmValues.value, 100)))
 
-// ---------------------------------------------------------------------------
 // hover
-// ---------------------------------------------------------------------------
 
 const svgRef = useTemplateRef<SVGSVGElement>('svg')
 const hover = useNearestPointHover<SeriesPoint>('xy')
@@ -224,9 +212,7 @@ function tooltipDate(ts: string) {
   return ts.replace('T', ' ').slice(0, 16)
 }
 
-// ---------------------------------------------------------------------------
 // speed-per-hour stat
-// ---------------------------------------------------------------------------
 
 const speedGood = computed(() => props.wpmPerHourTyping > 0)
 </script>

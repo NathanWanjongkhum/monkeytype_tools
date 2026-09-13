@@ -6,7 +6,10 @@ Typing Speed.md.
 Setup:
     pip install requests pandas
     Generate an ApeKey: Monkeytype > Settings > Danger Zone > Ape Keys
-    export MONKEYTYPE_APE_KEY=apekey_xxx
+    export MONKEYTYPE_APE_KEY=apekey_xxx (or drop it in backend/.env - see
+    envfile.load_env_file, which this script also uses so a key that only
+    works through generate_dashboard.py doesn't silently fail when this is
+    run standalone)
 
 Usage:
     python fetch_monkeytype_results.py [output_dir]
@@ -22,10 +25,22 @@ from typing import Any
 import requests
 
 import clilog
+from envfile import load_env_file
 
 API_BASE = "https://api.monkeytype.com"
 PAGE_LIMIT = 1000
 REQUEST_TIMEOUT_S = 30
+
+
+def _raise_for_status_verbose(resp: requests.Response) -> None:
+    """requests' own raise_for_status() only reports the status line - on
+    a non-2xx, Monkeytype's API body carries the actual reason (bad/
+    insufficiently-permissioned key, rate limit, etc.), so surface that
+    too instead of leaving it to a bare traceback."""
+    if resp.ok:
+        return
+    clilog.error("fetch", f"{resp.status_code} {resp.reason or ''} for {resp.url}: {resp.text}")
+    resp.raise_for_status()
 
 
 def fetch_all_results(ape_key: str) -> list[dict[str, Any]]:
@@ -39,7 +54,7 @@ def fetch_all_results(ape_key: str) -> list[dict[str, Any]]:
             params={"limit": PAGE_LIMIT, "offset": offset},
             timeout=REQUEST_TIMEOUT_S,
         )
-        resp.raise_for_status()
+        _raise_for_status_verbose(resp)
         page = resp.json()["data"]
         if not page:
             break
@@ -51,7 +66,18 @@ def fetch_all_results(ape_key: str) -> list[dict[str, Any]]:
     return results
 
 
+def fetch_tags(ape_key: str) -> list[dict[str, Any]]:
+    """Results only carry each tag as its opaque _id, never its name (see
+    docs/adr/0003-drill-completion-validation.md) - this is the only call
+    that returns the id -> name mapping needed to make sense of them."""
+    headers = {"Authorization": f"ApeKey {ape_key}"}
+    resp = requests.get(f"{API_BASE}/users/tags", headers=headers)
+    _raise_for_status_verbose(resp)
+    return resp.json()["data"]
+
+
 def main() -> None:
+    load_env_file()
     ape_key = os.environ.get("MONKEYTYPE_APE_KEY")
     if not ape_key:
         sys.exit("Set MONKEYTYPE_APE_KEY (Monkeytype > Settings > Danger Zone > Ape Keys)")
@@ -65,6 +91,12 @@ def main() -> None:
     with json_path.open("w") as f:
         json.dump(results, f, indent=2)
     clilog.ok("fetch", f"{len(results)} results -> {json_path}")
+
+    tags = fetch_tags(ape_key)
+    tags_path = os.path.join(out_dir, "monkeytype_tags.json")
+    with open(tags_path, "w") as f:
+        json.dump(tags, f, indent=2)
+    clilog.ok("fetch", f"{len(tags)} tags -> {tags_path}")
 
     try:
         import pandas as pd  # noqa: PLC0415 -- optional dependency, probed at runtime

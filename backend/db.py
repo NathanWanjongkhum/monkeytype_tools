@@ -80,6 +80,15 @@ CREATE TABLE attempts (
     match_confidence DOUBLE,
     match_method     VARCHAR
 );
+
+-- results.tags holds Monkeytype's raw tag _id's (an opaque hex id, not a
+-- name) - this table resolves them back to the display name used to create
+-- them, fetched separately from GET /users/tags since /results never
+-- includes it. See docs/adr/0003-drill-completion-validation.md.
+CREATE TABLE tags (
+    tag_id VARCHAR PRIMARY KEY,
+    name   VARCHAR
+);
 """
 
 
@@ -88,6 +97,6 @@ def connect(db_path: Path = DB_PATH) -> duckdb.DuckDBPyConnection:
 
 
 def rebuild_schema(con: duckdb.DuckDBPyConnection) -> None:
-    for table in ("attempts", "keylog_events", "session_parts", "results"):
+    for table in ("attempts", "keylog_events", "session_parts", "results", "tags"):
         con.execute(f"DROP TABLE IF EXISTS {table}")
     con.execute(SCHEMA)
