@@ -19,7 +19,7 @@ node_modules/
 dist/
 dist-ssr/
 *.local
-frontend/package-lock.json
+frontend/bun.lock
 
 # --- Data (generated/derived, personal typing data) ---
 data/*
