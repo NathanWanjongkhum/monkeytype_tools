@@ -4,3 +4,4 @@ numpy
 duckdb
 fastapi
 uvicorn
+pydantic
