@@ -91,17 +91,22 @@ function xOf(hours: number) {
 }
 
 const wpmValues = computed(() => filtered.value.map((s) => s.wpm))
-const yTicks = computed(() => {
+
+// yMax drives the actual pixel scale, so it must stay at or above the
+// padded data max even when niceTicks() rounds its top label down to the
+// nearest nice number below that (e.g. a max of exactly 100 => padded
+// target 110 => niceTicks tops out at 100) - otherwise values between the
+// rounded tick and the true max get plotted off the top of the chart.
+const yMin = 0
+const yMax = computed(() => {
   const vals = wpmValues.value
-  const vmax = vals.length ? Math.max(...vals) * 1.1 : 100
-  return niceTicks(0, vmax, 5)
+  return vals.length ? Math.max(...vals) * 1.1 : 100
 })
-const yMin = computed(() => yTicks.value[0])
-const yMax = computed(() => yTicks.value[yTicks.value.length - 1])
+const yTicks = computed(() => niceTicks(yMin, yMax.value, 5))
 
 function yOf(v: number) {
-  const denom = yMax.value - yMin.value || 1
-  return padT + (1 - (v - yMin.value) / denom) * plotH
+  const denom = yMax.value - yMin || 1
+  return padT + (1 - (v - yMin) / denom) * plotH
 }
 
 const gridLines = computed(() => yTicks.value.map((t) => ({ t, y: yOf(t) })))
