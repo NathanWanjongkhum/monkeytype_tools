@@ -236,6 +236,7 @@ footer { color: var(--text-muted); font-size: 11px; margin-top: 40px; }
 .trend-pill.active.avg100 { background: var(--trend-avg100); }
 .trend-pill.active .pill-dot { background: #fff; }
 
+.trend-line-halo { fill: none; stroke: var(--surface-1); stroke-width: 4.5; stroke-linecap: round; stroke-linejoin: round; opacity: 0.85; }
 .trend-line-best { fill: none; stroke: var(--trend-gold); stroke-width: 2; stroke-linejoin: round; }
 .trend-line-avg10 { fill: none; stroke: var(--series-1); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .trend-line-avg100 { fill: none; stroke: var(--trend-avg100); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
@@ -243,7 +244,11 @@ footer { color: var(--text-muted); font-size: 11px; margin-top: 40px; }
 .mode-dot { opacity: 0.4; }
 .pb-ring { fill: none; stroke: var(--trend-gold); stroke-width: 1.5; }
 
-.legend-row { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; font-size: 11px; color: var(--text-muted); }
+/* Left-align with the plot area, not the card edge: chart-svg scales to
+   100% of this same content width, so this must match padL/width from
+   WpmMasterChart.vue's own scale constants (48/860) to land under the
+   y-axis instead of sitting further left than the plot starts. */
+.legend-row { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; margin-left: 5.58%; font-size: 11px; color: var(--text-muted); }
 .legend-item { display: flex; align-items: center; gap: 5px; }
 .legend-swatch { width: 9px; height: 9px; border-radius: 50%; flex: none; }
 .legend-swatch.pb { background: none; border: 2px solid var(--trend-gold); }

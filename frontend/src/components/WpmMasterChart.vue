@@ -102,7 +102,7 @@ const yMax = computed(() => {
   const vals = wpmValues.value
   return vals.length ? Math.max(...vals) * 1.1 : 100
 })
-const yTicks = computed(() => niceTicks(yMin, yMax.value, 5))
+const yTicks = computed(() => niceTicks(yMin, yMax.value, 8))
 
 function yOf(v: number) {
   const denom = yMax.value - yMin || 1
@@ -379,14 +379,20 @@ const speedGood = computed(() => props.wpmPerHourTyping > 0)
           :key="i"
           :cx="p.x"
           :cy="p.y"
-          r="4"
+          r="3.5"
           class="mode-dot"
           :style="{ fill: p.color }"
         />
         <circle v-for="(p, i) in pbPoints" :key="'pb' + i" :cx="p.x" :cy="p.y" r="4" class="pb-ring" />
 
+        <!-- Halo behind each trend line so it stays legible over same-hued
+             dots (e.g. avg10 and the "custom" mode both use --series-1)
+             instead of visually fusing with them where paths overlap. -->
+        <path v-if="showBest" :d="bestPath" class="trend-line-halo" />
         <path v-if="showBest" :d="bestPath" class="trend-line-best" />
+        <path v-if="showAvg100" :d="avg100Path" class="trend-line-halo" />
         <path v-if="showAvg100" :d="avg100Path" class="trend-line-avg100" />
+        <path v-if="showAvg10" :d="avg10Path" class="trend-line-halo" />
         <path v-if="showAvg10" :d="avg10Path" class="trend-line-avg10" />
 
         <g class="crosshair" :style="{ opacity: hover.visible.value ? 1 : 0 }">
