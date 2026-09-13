@@ -240,8 +240,8 @@ footer { color: var(--text-muted); font-size: 11px; margin-top: 40px; }
 .trend-line-avg10 { fill: none; stroke: var(--series-1); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .trend-line-avg100 { fill: none; stroke: var(--trend-avg100); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
-.mode-dot { stroke: var(--surface-1); stroke-width: 1; opacity: 0.55; }
-.pb-ring { fill: none; stroke: var(--trend-gold); stroke-width: 2; }
+.mode-dot { opacity: 0.4; }
+.pb-ring { fill: none; stroke: var(--trend-gold); stroke-width: 1.5; }
 
 .legend-row { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; font-size: 11px; color: var(--text-muted); }
 .legend-item { display: flex; align-items: center; gap: 5px; }
