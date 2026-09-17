@@ -12,6 +12,7 @@ venv/
 *.egg-info/
 .pytest_cache/
 backend/.dashboard_logs/
+backend/uv.lock
 *.ruff_cache
 
 # --- Node / frontend ---
