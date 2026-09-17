@@ -337,13 +337,57 @@
     openCustomTextPopupAndFill(text);
   }
 
+  const PANEL_FADE_TRANSITION_MS = 300;
+
+  function testPageElement() {
+    return document.querySelector(".page.pageTest");
+  }
+
+  function isTestPageActive() {
+    const el = testPageElement();
+    return !!el && !el.classList.contains("hidden");
+  }
+
+  function focusElement() {
+    return document.querySelector("footer");
+  }
+
+  function isAttemptInProgress() {
+    const el = focusElement();
+    return !!el && el.classList.contains("focus");
+  }
+
+  let drillPanelEl = null;
+
+  function updatePanelFade() {
+    if (!drillPanelEl) return;
+    const visible = isTestPageActive() && !isAttemptInProgress();
+    drillPanelEl.style.opacity = visible ? "1" : "0";
+    drillPanelEl.style.pointerEvents = visible ? "auto" : "none";
+  }
+
+  function watchTestPageVisibility() {
+    const pageEl = testPageElement();
+    const footerEl = focusElement();
+    if (!pageEl || !footerEl) {
+      setTimeout(watchTestPageVisibility, 500);
+      return;
+    }
+    updatePanelFade();
+    const observer = new MutationObserver(updatePanelFade);
+    observer.observe(pageEl, { attributes: true, attributeFilter: ["class"] });
+    observer.observe(footerEl, { attributes: true, attributeFilter: ["class"] });
+  }
+
   function injectDrillPanel() {
     if (!document.body || document.getElementById("mt-logger-drill-panel")) return;
     const panel = document.createElement("div");
     panel.id = "mt-logger-drill-panel";
     panel.style.cssText =
       "position:fixed;bottom:8px;right:8px;z-index:9999;display:flex;gap:4px;" +
-      "background:rgba(0,0,0,.6);padding:6px;border-radius:6px;font:11px sans-serif;";
+      "background:rgba(0,0,0,.6);padding:6px;border-radius:6px;font:11px sans-serif;" +
+      `transition:opacity ${PANEL_FADE_TRANSITION_MS}ms ease;opacity:0;`;
+    drillPanelEl = panel;
 
     const categories = [
       ["overall", "Overall"],
@@ -384,6 +428,7 @@
     }
     paintActive();
     document.body.appendChild(panel);
+    watchTestPageVisibility();
   }
 
   function findTagPopup() {
